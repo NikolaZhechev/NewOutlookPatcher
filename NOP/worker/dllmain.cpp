@@ -7,155 +7,36 @@
 #include <commctrl.h>
 #include "WebView2.h"
 #include "WebView2EnvironmentOptions.h"
+#include "MinHook.h"
 
-#pragma region "IAT patching routine"
-// https://blog.neteril.org/blog/2016/12/23/diverting-functions-windows-iat-patching/
-inline bool VnPatchIAT(HMODULE hMod, const char* libName, const char* funcName, uintptr_t hookAddr) {
-    // Increment module reference count to prevent other threads from unloading it while we're working with it
-    HMODULE module;
-    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)hMod, &module)) return false;
+#pragma comment(lib, "libMinHook.x64.lib")
 
-    // Get a reference to the import table to locate the kernel32 entry
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)module;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uintptr_t)module + dos->e_lfanew);
-    PIMAGE_IMPORT_DESCRIPTOR importDescriptor = (PIMAGE_IMPORT_DESCRIPTOR)((uintptr_t)module +
-        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+void DbgPrintf(LPCWSTR fmt, ...)
+{
+    va_list marker;
+    WCHAR szBuffer[1024];
 
-    // In the import table find the entry that corresponds to kernel32
-    bool found = false;
-    while (importDescriptor->Characteristics && importDescriptor->Name) {
-        PSTR importName = (PSTR)((PBYTE)module + importDescriptor->Name);
-        if (::_stricmp(importName, libName) == 0) { found = true; break; }
-        importDescriptor++;
-    }
-    if (!found) { ::FreeLibrary(module); return false; }
+    va_start(marker, fmt);
+    wvsprintf(szBuffer, fmt, marker);
+    va_end(marker);
 
-    // From the kernel32 import descriptor, go over its IAT thunks to
-    // find the one used by the rest of the code to call GetProcAddress
-    PIMAGE_THUNK_DATA oldthunk = (PIMAGE_THUNK_DATA)((PBYTE)module + importDescriptor->OriginalFirstThunk);
-    PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)((PBYTE)module + importDescriptor->FirstThunk);
-    while (thunk->u1.Function) {
-        PROC* funcStorage = (PROC*)&thunk->u1.Function;
-
-        bool bFound = false;
-        if (oldthunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) {
-            bFound = (!(*((WORD*)&(funcName)+1)) && IMAGE_ORDINAL32(oldthunk->u1.Ordinal) == (DWORD_PTR)funcName);
-        }
-        else {
-            PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)module + oldthunk->u1.AddressOfData);
-            bFound = ((*((WORD*)&(funcName)+1)) && !::_stricmp((char*)byName->Name, funcName));
-        }
-
-        // Found it, now let's patch it
-        if (bFound) {
-            // Get the memory page where the info is stored
-            MEMORY_BASIC_INFORMATION mbi;
-            ::VirtualQuery(funcStorage, &mbi, sizeof(MEMORY_BASIC_INFORMATION));
-
-            // Try to change the page to be writable if it's not already
-            if (!::VirtualProtect(mbi.BaseAddress, mbi.RegionSize, PAGE_READWRITE, &mbi.Protect)) {
-                ::FreeLibrary(module);
-                return false;
-            }
-
-            // Store our hook
-            *funcStorage = (PROC)hookAddr;
-
-            // Restore the old flag on the page
-            DWORD dwOldProtect;
-            ::VirtualProtect(mbi.BaseAddress, mbi.RegionSize, mbi.Protect, &dwOldProtect);
-
-            // Profit
-            ::FreeLibrary(module);
-            return true;
-        }
-
-        thunk++;
-        oldthunk++;
-    }
-
-    ::FreeLibrary(module);
-    return false;
+    OutputDebugStringW(szBuffer);
+    OutputDebugStringW(L"\r\n");
 }
 
-inline BOOL VnPatchDelayIAT(HMODULE hMod, const char* libName, const char* funcName, uintptr_t hookAddr) {
-    // Increment module reference count to prevent other threads from unloading it while we're working with it
-    HMODULE lib;
-    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)hMod, &lib)) return FALSE;
+// Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
+typedef HRESULT(WINAPI* PFN_CreateCoreWebView2EnvironmentWithOptions)(
+    PCWSTR browserExecutableFolder,
+    PCWSTR userDataFolder,
+    ICoreWebView2EnvironmentOptions* environmentOptions,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler
+    );
 
-    PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)lib;
-    PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((uintptr_t)lib + dos->e_lfanew);
-    PIMAGE_DELAYLOAD_DESCRIPTOR dload = (PIMAGE_DELAYLOAD_DESCRIPTOR)((uintptr_t)lib +
-        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].VirtualAddress);
-    while (dload->DllNameRVA)
-    {
-        char* dll = (char*)((uintptr_t)lib + dload->DllNameRVA);
-        if (!_stricmp(dll, libName)) {
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-            printf("[PatchDelayIAT] Found %s in IAT.\n", libName);
-#endif
-
-            PIMAGE_THUNK_DATA firstthunk = (PIMAGE_THUNK_DATA)((uintptr_t)lib + dload->ImportNameTableRVA);
-            PIMAGE_THUNK_DATA functhunk = (PIMAGE_THUNK_DATA)((uintptr_t)lib + dload->ImportAddressTableRVA);
-            while (firstthunk->u1.AddressOfData)
-            {
-                if (firstthunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)
-                {
-                    if (!(*((WORD*)&(funcName)+1)) && IMAGE_ORDINAL32(firstthunk->u1.Ordinal) == (DWORD_PTR)funcName)
-                    {
-                        DWORD oldProtect;
-                        if (VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect))
-                        {
-                            functhunk->u1.Function = (uintptr_t)hookAddr;
-                            VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), oldProtect, &oldProtect);
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-                            printf("[PatchDelayIAT] Patched 0x%x in %s to 0x%p.\n", funcName, libName, hookAddr);
-#endif
-                            FreeLibrary(lib);
-                            return TRUE;
-                        }
-                        FreeLibrary(lib);
-                        return FALSE;
-                    }
-                }
-                else
-                {
-                    PIMAGE_IMPORT_BY_NAME byName = (PIMAGE_IMPORT_BY_NAME)((uintptr_t)lib + firstthunk->u1.AddressOfData);
-                    if ((*((WORD*)&(funcName)+1)) && !_stricmp((char*)byName->Name, funcName))
-                    {
-                        DWORD oldProtect;
-                        if (VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect))
-                        {
-                            functhunk->u1.Function = (uintptr_t)hookAddr;
-                            VirtualProtect(&functhunk->u1.Function, sizeof(uintptr_t), oldProtect, &oldProtect);
-#ifdef _LIBVALINET_DEBUG_HOOKING_IATPATCH
-                            printf("[PatchDelayIAT] Patched %s in %s to 0x%p.\n", funcName, libName, hookAddr);
-#endif
-                            FreeLibrary(lib);
-                            return TRUE;
-                        }
-                        FreeLibrary(lib);
-                        return FALSE;
-                    }
-                }
-                functhunk++;
-                firstthunk++;
-            }
-        }
-        dload++;
-    }
-    FreeLibrary(lib);
-    return FALSE;
-}
-#pragma endregion
+// Target function
+PFN_CreateCoreWebView2EnvironmentWithOptions pCreateCoreWebView2EnvironmentWithOptions = NULL;
+PFN_CreateCoreWebView2EnvironmentWithOptions pCreateCoreWebView2EnvironmentWithOptionsTarget; //original function pointer BEFORE hook do not call this!
 
 #pragma region "Hooks"
-/*
-LRESULT(*__WndProc)(HWND, UINT, WPARAM, LPARAM) = nullptr;
-LRESULT _WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    return __WndProc(hWnd, uMsg, wParam, lParam);
-}
-*/
 
 HRESULT(*__ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke)(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* _this, HRESULT, ICoreWebView2Controller*) = nullptr;
 HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* _this, HRESULT errorCode, ICoreWebView2Controller* createdController) {
@@ -184,7 +65,7 @@ document.head.appendChild(styleElement);\n\
 ";
             // .root-192, .splitButtonMenuButton-220 { background-color: transparent !important; color: var(--neutralDark) !important; } " /* Deemphasize New mail button */ L"\
 
-            //::MessageBoxW(nullptr, script, L"", 0);
+            ::DbgPrintf(script);
             sender->ExecuteScript(script, Microsoft::WRL::Callback<ICoreWebView2ExecuteScriptCompletedHandler>([&](HRESULT errorCode, LPCWSTR resultObjectAsJson) -> HRESULT {
                 return S_OK;
                 }).Get());
@@ -226,15 +107,15 @@ document.head.appendChild(styleElement);\n\
         */
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke", L"", 0);
+    ::DbgPrintf(L"Hello from _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke");
     return __ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke(_this, errorCode, createdController);
 }
 
 HRESULT(*__ICoreWebView2Environment_CreateCoreWebView2Controller)(ICoreWebView2Environment*, HWND, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*) = nullptr;
-HRESULT STDMETHODCALLTYPE _ICoreWebView2Environment_CreateCoreWebView2Controller(ICoreWebView2Environment* _this, HWND parentWindow, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* controllerCompletedHandler) {
+HRESULT STDMETHODCALLTYPE _ICoreWebView2Environment_CreateCoreWebView2Controller(ICoreWebView2Environment* _this, HWND parentWindow, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler* controllerCompletedHandler) {  
     void** controllerCompletedHandlerVtbl = *(void***)controllerCompletedHandler;
     if (controllerCompletedHandlerVtbl[3] != _ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke) {
-        //::MessageBoxW(nullptr, L"Patching controllerCompletedHandlerVtbl", L"", 0);
+        ::DbgPrintf(L"Patching controllerCompletedHandlerVtbl");
         DWORD oldProtect = 0;
         if (::VirtualProtect(&controllerCompletedHandlerVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
             __ICoreWebView2CreateCoreWebView2ControllerCompletedHandler_Invoke = reinterpret_cast<HRESULT(*)(ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*, HRESULT, ICoreWebView2Controller*)>(controllerCompletedHandlerVtbl[3]);
@@ -243,7 +124,7 @@ HRESULT STDMETHODCALLTYPE _ICoreWebView2Environment_CreateCoreWebView2Controller
         }
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2Environment_CreateCoreWebView2Controller", L"", 0);
+    ::DbgPrintf(L"Hello from _ICoreWebView2Environment_CreateCoreWebView2Controller");
     return __ICoreWebView2Environment_CreateCoreWebView2Controller(_this, parentWindow, controllerCompletedHandler);
 }
 
@@ -251,7 +132,7 @@ HRESULT(*__ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke)(IC
 HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* _this, HRESULT errorCode, ICoreWebView2Environment* createdEnvironment) {
     void** createdEnvironmentVtbl = *(void***)createdEnvironment;
     if (createdEnvironmentVtbl[3] != _ICoreWebView2Environment_CreateCoreWebView2Controller) {
-        //::MessageBoxW(nullptr, L"Patching createdEnvironmentVtbl", L"", 0);
+        ::DbgPrintf(L"Patching createdEnvironmentVtbl");
         DWORD oldProtect = 0;
         if (::VirtualProtect(&createdEnvironmentVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
             __ICoreWebView2Environment_CreateCoreWebView2Controller = reinterpret_cast<HRESULT(*)(ICoreWebView2Environment*, HWND, ICoreWebView2CreateCoreWebView2ControllerCompletedHandler*)>(createdEnvironmentVtbl[3]);
@@ -260,15 +141,15 @@ HRESULT STDMETHODCALLTYPE _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHa
         }
     }
 
-    //::MessageBoxW(nullptr, L"Hello from _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke", L"", 0);
+    ::DbgPrintf(L"Hello from _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke");
     return __ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke(_this, errorCode, createdEnvironment);
 }
 
 HRESULT(*__CreateCoreWebView2EnvironmentWithOptions)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*) = nullptr;
-STDAPI _CreateCoreWebView2EnvironmentWithOptions(PCWSTR browserExecutableFolder, PCWSTR userDataFolder, ICoreWebView2EnvironmentOptions* environmentOptions, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler) {
+STDAPI _CreateCoreWebView2EnvironmentWithOptions(PCWSTR browserExecutableFolder, PCWSTR userDataFolder, ICoreWebView2EnvironmentOptions* environmentOptions, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler) {  
     void** environmentCreatedHandlerVtbl = *(void***)environmentCreatedHandler;
     if (environmentCreatedHandlerVtbl[3] != _ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke) {
-        //::MessageBoxW(nullptr, L"Patching environmentCreatedHandlerVtbl", L"", 0);
+        ::DbgPrintf(L"Patching environmentCreatedHandlerVtbl");
         DWORD oldProtect = 0;
         if (::VirtualProtect(&environmentCreatedHandlerVtbl[3], sizeof(uintptr_t), PAGE_EXECUTE_READWRITE, &oldProtect)) {
             __ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler_Invoke = reinterpret_cast<HRESULT(*)(ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*, HRESULT, ICoreWebView2Environment*)>(environmentCreatedHandlerVtbl[3]);
@@ -283,8 +164,8 @@ STDAPI _CreateCoreWebView2EnvironmentWithOptions(PCWSTR browserExecutableFolder,
         __CreateCoreWebView2EnvironmentWithOptions = reinterpret_cast<HRESULT(*)(PCWSTR, PCWSTR, ICoreWebView2EnvironmentOptions*, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)>(::GetProcAddress(hMod, "CreateCoreWebView2EnvironmentWithOptions"));
         winrt::check_bool(__CreateCoreWebView2EnvironmentWithOptions);
     }
-    //::MessageBoxW(nullptr, L"Hello from _CreateCoreWebView2EnvironmentWithOptions", L"", 0);
-    return __CreateCoreWebView2EnvironmentWithOptions(browserExecutableFolder, userDataFolder, environmentOptions, environmentCreatedHandler);
+    ::DbgPrintf(L"Hello from _CreateCoreWebView2EnvironmentWithOptions");
+    return pCreateCoreWebView2EnvironmentWithOptions(browserExecutableFolder, userDataFolder, environmentOptions, environmentCreatedHandler);
 }
 #pragma endregion
 
@@ -335,16 +216,33 @@ typedef struct _RTL_VERIFIER_PROVIDER_DESCRIPTOR {
     RTL_VERIFIER_NTDLLHEAPFREE_CALLBACK ProviderNtdllHeapFreeCallback;
 } RTL_VERIFIER_PROVIDER_DESCRIPTOR;
 
+HMODULE HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
+
 RTL_VERIFIER_DLL_DESCRIPTOR noHooks{};
-RTL_VERIFIER_PROVIDER_DESCRIPTOR desc = {
+
+RTL_VERIFIER_THUNK_DESCRIPTOR kernelbaseHooks[] =
+{
+    { (PCHAR)"LoadLibraryExW", nullptr, HookLoadLibraryExW},
+    { nullptr, nullptr, nullptr },
+};
+
+RTL_VERIFIER_DLL_DESCRIPTOR dlls[] =
+{
+    { (PWCHAR)L"kernelbase.dll", 0, nullptr, kernelbaseHooks },
+    { nullptr, 0, nullptr, nullptr },
+};
+
+RTL_VERIFIER_PROVIDER_DESCRIPTOR desc =
+{
     sizeof(desc),
-    &noHooks,
+    dlls,
     [](auto, auto, auto, auto) {},
     [](auto, auto, auto, auto) {},
     nullptr, 0, 0,
     nullptr, nullptr, nullptr,
     [](auto, auto) {},
 };
+
 #pragma endregion
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
@@ -362,9 +260,55 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
         break;
     case DLL_PROCESS_VERIFIER:
         *(PVOID*)lpvReserved = &desc;
-        ::VnPatchIAT(::GetModuleHandleW(nullptr), "WebView2Loader.dll", "CreateCoreWebView2EnvironmentWithOptions", reinterpret_cast<uintptr_t>(_CreateCoreWebView2EnvironmentWithOptions));
-        ::VnPatchDelayIAT(::GetModuleHandleW(nullptr), "WebView2Loader.dll", "CreateCoreWebView2EnvironmentWithOptions", reinterpret_cast<uintptr_t>(_CreateCoreWebView2EnvironmentWithOptions));
         break;
     }
     return true;
+}
+
+// Detour function
+HRESULT WINAPI DetourCreateCoreWebView2EnvironmentWithOptions(
+    PCWSTR browserExecutableFolder,
+    PCWSTR userDataFolder,
+    ICoreWebView2EnvironmentOptions* environmentOptions,
+    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler* environmentCreatedHandler)
+{
+    // Modify parameters here, e.g., forcing a custom userDataFolder
+    return pCreateCoreWebView2EnvironmentWithOptions(
+        browserExecutableFolder,
+        L"C:\\Custom\\Data\\Path", // Example: Override
+        environmentOptions,
+        environmentCreatedHandler
+    );
+}
+
+HMODULE WINAPI HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+{
+    auto result = ::LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+    DbgPrintf(L"NOP: LoadedLibraryExW - %ls", lpLibFileName);
+
+    if (lstrcmpW(lpLibFileName, L"C:\\Windows\\system32\\uxtheme.dll") == 0)
+    {
+        MH_STATUS status = MH_Initialize();
+        if (status != MH_OK)
+        {
+            DbgPrintf(L"NOP: Error initialising MinHook 0x%08X", status);
+            return result;
+        }
+
+        status = MH_CreateHookApiEx(L"WebView2Loader", "CreateCoreWebView2EnvironmentWithOptions", &_CreateCoreWebView2EnvironmentWithOptions, reinterpret_cast<void**>(&pCreateCoreWebView2EnvironmentWithOptions), reinterpret_cast<void**>(&pCreateCoreWebView2EnvironmentWithOptionsTarget));
+        if (status != MH_OK)
+        {
+            DbgPrintf(L"NOP: Error creating hook 0x%08X", status);
+            return result;
+        }
+
+        status = MH_EnableHook(MH_ALL_HOOKS);
+        if (status != MH_OK)
+        {
+            DbgPrintf(L"NOP: Error enabling hook 0x%08X", status);
+            return result;
+        }
+    }
+
+    return result;
 }
