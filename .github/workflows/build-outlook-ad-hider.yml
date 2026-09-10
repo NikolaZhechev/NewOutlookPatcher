@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider DLL
+name: Build Outlook Ad Hider V3
 
 on:
   workflow_dispatch:
@@ -17,65 +17,98 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook ad row only
+      - name: Patch worker for Outlook 1.2026.818+
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
-          $lines = Get-Content -Path $path
-
-          $start = -1
-          $end = -1
-
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($start -lt 0 -and $lines[$i] -match 'const cssClass =') {
-              $start = $i
-            }
-            if ($lines[$i] -match 'styleElement\.appendChild') {
-              $end = $i
-              break
-            }
-          }
-
-          if ($start -lt 0 -or $end -lt 0 -or $end -le $start) {
-            throw "Could not locate CSS block in dllmain.cpp"
-          }
-
-          $before = @()
-          if ($start -gt 0) {
-            $before = $lines[0..($start - 1)]
-          }
-
-          $after = $lines[$end..($lines.Count - 1)]
-
-          $newCss = @(
-            'const cssClass = \"\'
-            '[data-message-ad-id] { display: none !important; }\";\n\'
-          )
-
-          $out = @()
-          $out += $before
-          $out += $newCss
-          $out += $after
-
-          [System.IO.File]::WriteAllLines(
-            (Resolve-Path $path),
-            $out,
-            [System.Text.UTF8Encoding]::new($true)
-          )
-
           $content = Get-Content -Path $path -Raw
+
+          # Keep only the selector that was proven manually in this Outlook build.
+          $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
+          $replacement = @'
+          const cssClass = \"\
+          [data-message-ad-id] { display: none !important; }\";\n\
+          styleElement.appendChild
+          '@
+          $content = [regex]::Replace($content, $pattern, $replacement, 1)
+
+          # Disable the patcher's F12 interception.
           $content = $content.Replace(
             'const wchar_t* isF12Enabled = L"y_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";',
             'const wchar_t* isF12Enabled = L"n_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";'
           )
+
+          # Outlook 1.2026.818 can load libraries in a different order/path.
+          # Do not wait for one exact uxtheme.dll path. Install the WebView2 hook
+          # as soon as WebView2Loader.dll is actually present in the process.
+          $hookPattern = '(?s)HMODULE WINAPI HookLoadLibraryExW\(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags\)\s*\{.*?\}\s*$'
+          $hookReplacement = @'
+          HMODULE WINAPI HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
+          {
+              auto result = ::LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+
+              static volatile LONG hookInstalled = 0;
+              static volatile LONG hookInstalling = 0;
+
+              if (::GetModuleHandleW(L"WebView2Loader.dll") != nullptr &&
+                  ::InterlockedCompareExchange(&hookInstalled, 0, 0) == 0 &&
+                  ::InterlockedCompareExchange(&hookInstalling, 1, 0) == 0)
+              {
+                  MH_STATUS status = MH_Initialize();
+                  if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED)
+                  {
+                      DbgPrintf(L"NOP: Error initialising MinHook 0x%08X", status);
+                      ::InterlockedExchange(&hookInstalling, 0);
+                      return result;
+                  }
+
+                  status = MH_CreateHookApiEx(
+                      L"WebView2Loader.dll",
+                      "CreateCoreWebView2EnvironmentWithOptions",
+                      &_CreateCoreWebView2EnvironmentWithOptions,
+                      reinterpret_cast<void**>(&pCreateCoreWebView2EnvironmentWithOptions),
+                      reinterpret_cast<void**>(&pCreateCoreWebView2EnvironmentWithOptionsTarget)
+                  );
+
+                  if (status != MH_OK && status != MH_ERROR_ALREADY_CREATED)
+                  {
+                      DbgPrintf(L"NOP: Error creating WebView2 hook 0x%08X", status);
+                      ::InterlockedExchange(&hookInstalling, 0);
+                      return result;
+                  }
+
+                  status = MH_EnableHook(MH_ALL_HOOKS);
+                  if (status != MH_OK && status != MH_ERROR_ENABLED)
+                  {
+                      DbgPrintf(L"NOP: Error enabling WebView2 hook 0x%08X", status);
+                      ::InterlockedExchange(&hookInstalling, 0);
+                      return result;
+                  }
+
+                  ::InterlockedExchange(&hookInstalled, 1);
+                  ::InterlockedExchange(&hookInstalling, 0);
+                  DbgPrintf(L"NOP: WebView2 hook installed");
+              }
+
+              return result;
+          }
+          '@
+
+          if (-not [regex]::IsMatch($content, $hookPattern)) {
+            throw "Could not locate HookLoadLibraryExW in dllmain.cpp"
+          }
+          $content = [regex]::Replace($content, $hookPattern, $hookReplacement, 1)
+
           [System.IO.File]::WriteAllText(
             (Resolve-Path $path),
             $content,
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "Patched CSS:"
+          Write-Host "Patched selector:"
           Select-String -Path $path -Pattern "data-message-ad-id"
+          Write-Host "Patched WebView2 hook trigger:"
+          Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
         shell: cmd
@@ -91,7 +124,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare ready package
+      - name: Prepare V3 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -104,78 +137,79 @@ jobs:
           New-Item -ItemType Directory -Force -Path $package | Out-Null
           Copy-Item $builtDll (Join-Path $package "NewOutlookPatcher.dll") -Force
 
-          $install = @"
+          $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider - INSTALL
+          title Outlook Ad Hider V3 - UPDATE
 
-          net session >nul 2>&1
-          if not "%errorlevel%"=="0" (
-            powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-            exit /b
+          fltmc >nul 2>&1
+          if errorlevel 1 (
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:ComSpec -ArgumentList '/c','\"%~f0\"' -Verb RunAs"
+              exit /b
           )
-
-          if not exist "%~dp0NewOutlookPatcher.dll" (
-            echo Missing NewOutlookPatcher.dll
-            pause
-            exit /b 1
-          )
-
-          taskkill /F /IM olk.exe /T >nul 2>&1
-          copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul
-
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); $p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe'; $k=$base.CreateSubKey($p); $g=$k.GetValue('GlobalFlag',$null); if($null -eq $g){$g=0}; $k.SetValue('GlobalFlag',([int]$g -bor 0x100),[Microsoft.Win32.RegistryValueKind]::DWord); $v=[string]$k.GetValue('VerifierDlls',''); if($v -notmatch '(^|\s)NewOutlookPatcher\.dll($|\s)'){$v=($v+' NewOutlookPatcher.dll').Trim()}; $k.SetValue('VerifierDlls',$v,[Microsoft.Win32.RegistryValueKind]::String); $k.Close(); $base.Close()"
 
           echo.
-          echo Outlook ad hider installed.
+          echo Closing New Outlook...
+          taskkill /F /IM olk.exe /T >nul 2>&1
+
+          for /L %%N in (1,1,20) do (
+              tasklist /FI "IMAGENAME eq olk.exe" 2>nul | find /I "olk.exe" >nul
+              if errorlevel 1 goto :copydll
+              timeout /t 1 /nobreak >nul
+          )
+
+          :copydll
+          echo Replacing DLL...
+          for /L %%N in (1,1,10) do (
+              copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
+              if not errorlevel 1 goto :verify
+              timeout /t 1 /nobreak >nul
+          )
+
+          echo.
+          echo ERROR: DLL is still locked and could not be replaced.
+          echo Restart Windows, then run this file again before opening Outlook.
+          echo.
+          pause
+          exit /b 1
+
+          :verify
+          fc /b "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul
+          if errorlevel 1 (
+              echo.
+              echo ERROR: DLL verification failed.
+              echo.
+              pause
+              exit /b 1
+          )
+
+          echo.
+          echo V3 DLL installed successfully.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
           echo.
           pause
-          "@
+          '@
 
-          $uninstall = @"
-          @echo off
-          setlocal EnableExtensions
-          title Outlook Ad Hider - UNINSTALL
-
-          net session >nul 2>&1
-          if not "%errorlevel%"=="0" (
-            powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-            exit /b
-          )
-
-          taskkill /F /IM olk.exe /T >nul 2>&1
-
-          powershell -NoProfile -ExecutionPolicy Bypass -Command "$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); $p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe'; $k=$base.OpenSubKey($p,$true); if($k){ $v=[string]$k.GetValue('VerifierDlls',''); $parts=@($v -split '\s+' | Where-Object {$_ -and $_ -ne 'NewOutlookPatcher.dll'}); if($parts.Count -eq 0){$k.DeleteValue('VerifierDlls',$false); $g=$k.GetValue('GlobalFlag',$null); if($null -ne $g){$n=[int]$g -band (-bnot 0x100); if($n -eq 0){$k.DeleteValue('GlobalFlag',$false)}else{$k.SetValue('GlobalFlag',$n,[Microsoft.Win32.RegistryValueKind]::DWord)}}}else{$k.SetValue('VerifierDlls',($parts -join ' '),[Microsoft.Win32.RegistryValueKind]::String)}; $k.Close() }; $base.Close()"
-
-          del /F /Q "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
-
-          echo.
-          echo Outlook ad hider uninstalled.
-          start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
-          echo.
-          pause
-          "@
-
-          $readme = @"
-          Outlook Ad Hider
-          -----------------
-          This build hides only the New Outlook message-list advertising row.
-
-          CSS selector:
+          $readme = @'
+          Outlook Ad Hider V3
+          --------------------
+          This build keeps the proven selector:
           [data-message-ad-id] { display: none !important; }
 
-          Chrome and Chrome cache are not touched.
-          "@
+          V3 also changes WHEN the WebView2 hook is installed:
+          it waits for WebView2Loader.dll itself instead of one exact uxtheme.dll path.
 
-          Set-Content -Path (Join-Path $package "INSTALL-Outlook-Ad-Hider.cmd") -Value $install -Encoding ASCII
-          Set-Content -Path (Join-Path $package "UNINSTALL-Outlook-Ad-Hider.cmd") -Value $uninstall -Encoding ASCII
+          Existing IFEO/AppVerifier registry settings can remain as they are.
+          Chrome and Chrome cache are not touched.
+          '@
+
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V3.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload ready package
+      - name: Upload V3 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-Ready
+          name: Outlook-Ad-Hider-V3
           path: package
           if-no-files-found: error
