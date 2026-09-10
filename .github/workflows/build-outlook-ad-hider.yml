@@ -17,117 +17,161 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Replace worker with Outlook 1.2026 ad-only patch
-        shell: powershell
+      - name: Patch worker for Outlook ad row only
+        shell: pwsh
         run: |
-          $b64 = @'
-77u/I2luY2x1ZGUgPHdybC5oPgojaW5jbHVkZSA8d2lsL2NvbS5oPgojaW5jbHVkZSA8d2lucnQvV2luZG93cy5Gb3VuZGF0aW9uLkNvbGxlY3Rpb25zLmg+CiNpbmNsdWRlIDx3aW5ydC9XaW5kb3dzLldlYi5TeW5kaWNhdGlvbi5oPgojaW5jbHVkZSA8aW9zdHJlYW0+CiNpbmNsdWRlIDxXaW5kb3dzLmg+CiNpbmNsdWRlIDxjb21tY3RybC5oPgojaW5jbHVkZSAiV2ViVmlldzIuaCIKI2luY2x1ZGUgIldlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zLmgiCiNpbmNsdWRlICJNaW5Ib29rLmgiCgojcHJhZ21hIGNvbW1lbnQobGliLCAibGliTWluSG9vay54NjQubGliIikKCnZvaWQgRGJnUHJpbnRmKExQQ1dTVFIgZm10LCAuLi4pCnsKICAgIHZhX2xpc3QgbWFya2VyOwogICAgV0NIQVIgc3pCdWZmZXJbMTAyNF07CgogICAgdmFfc3RhcnQobWFya2VyLCBmbXQpOwogICAgd3ZzcHJpbnRmKHN6QnVmZmVyLCBmbXQsIG1hcmtlcik7CiAgICB2YV9lbmQobWFya2VyKTsKCiAgICBPdXRwdXREZWJ1Z1N0cmluZ1coc3pCdWZmZXIpOwogICAgT3V0cHV0RGVidWdTdHJpbmdXKEwiXHJcbiIpOwp9CgovLyBFeGFtcGxlOiBNaW5Ib29rIHNpZ25hdHVyZSBmb3IgQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucwp0eXBlZGVmIEhSRVNVTFQoV0lOQVBJKiBQRk5fQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucykoCiAgICBQQ1dTVFIgYnJvd3NlckV4ZWN1dGFibGVGb2xkZXIsCiAgICBQQ1dTVFIgdXNlckRhdGFGb2xkZXIsCiAgICBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zKiBlbnZpcm9ubWVudE9wdGlvbnMsCiAgICBJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRDb21wbGV0ZWRIYW5kbGVyKiBlbnZpcm9ubWVudENyZWF0ZWRIYW5kbGVyCiAgICApOwoKLy8gVGFyZ2V0IGZ1bmN0aW9uClBGTl9DcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zIHBDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zID0gTlVMTDsKUEZOX0NyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnMgcENyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnNUYXJnZXQ7IC8vb3JpZ2luYWwgZnVuY3Rpb24gcG9pbnRlciBCRUZPUkUgaG9vayBkbyBub3QgY2FsbCB0aGlzIQoKI3ByYWdtYSByZWdpb24gIkhvb2tzIgoKSFJFU1VMVCgqX19JQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXJfSW52b2tlKShJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXIqIF90aGlzLCBIUkVTVUxULCBJQ29yZVdlYlZpZXcyQ29udHJvbGxlciopID0gbnVsbHB0cjsKSFJFU1VMVCBTVERNRVRIT0RDQUxMVFlQRSBfSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkNvbnRyb2xsZXJDb21wbGV0ZWRIYW5kbGVyX0ludm9rZShJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXIqIF90aGlzLCBIUkVTVUxUIGVycm9yQ29kZSwgSUNvcmVXZWJWaWV3MkNvbnRyb2xsZXIqIGNyZWF0ZWRDb250cm9sbGVyKSB7CiAgICBpZiAoY3JlYXRlZENvbnRyb2xsZXIgIT0gbnVsbHB0cikgewogICAgICAgIHdpbnJ0Ojpjb21fcHRyPElDb3JlV2ViVmlldzI+IHdlYnZpZXc7CiAgICAgICAgd2lucnQ6OmNoZWNrX2hyZXN1bHQoY3JlYXRlZENvbnRyb2xsZXItPmdldF9Db3JlV2ViVmlldzIod2Vidmlldy5wdXQoKSkpOwoKICAgICAgICBFdmVudFJlZ2lzdHJhdGlvblRva2VuIHRrbl9OYXZpZ2F0aW9uQ29tcGxldGVkOwogICAgICAgIHdpbnJ0OjpjaGVja19ocmVzdWx0KHdlYnZpZXctPmFkZF9OYXZpZ2F0aW9uQ29tcGxldGVkKE1pY3Jvc29mdDo6V1JMOjpDYWxsYmFjazxJQ29yZVdlYlZpZXcyTmF2aWdhdGlvbkNvbXBsZXRlZEV2ZW50SGFuZGxlcj4oW10oSUNvcmVXZWJWaWV3Miogc2VuZGVyLCBJQ29yZVdlYlZpZXcyTmF2aWdhdGlvbkNvbXBsZXRlZEV2ZW50QXJncyogYXJncykgLT4gSFJFU1VMVCB7CgogICAgICAgICAgICBhdXRvIHNjcmlwdCA9IEwiXApjb25zdCBzdHlsZUVsZW1lbnQgPSBkb2N1bWVudC5jcmVhdGVFbGVtZW50KCdzdHlsZScpO1xuXApjb25zdCBjc3NDbGFzcyA9IFwiW2RhdGEtbWVzc2FnZS1hZC1pZF0geyBkaXNwbGF5OiBub25lICFpbXBvcnRhbnQ7IH1cIjtcblwKc3R5bGVFbGVtZW50LmFwcGVuZENoaWxkKGRvY3VtZW50LmNyZWF0ZVRleHROb2RlKGNzc0NsYXNzKSk7XG5cCmRvY3VtZW50LmhlYWQuYXBwZW5kQ2hpbGQoc3R5bGVFbGVtZW50KTtcblwKIjsKICAgICAgICAgICAgLy8gLnJvb3QtMTkyLCAuc3BsaXRCdXR0b25NZW51QnV0dG9uLTIyMCB7IGJhY2tncm91bmQtY29sb3I6IHRyYW5zcGFyZW50ICFpbXBvcnRhbnQ7IGNvbG9yOiB2YXIoLS1uZXV0cmFsRGFyaykgIWltcG9ydGFudDsgfSAiIC8qIERlZW1waGFzaXplIE5ldyBtYWlsIGJ1dHRvbiAqLyBMIlwKCiAgICAgICAgICAgIDo6RGJnUHJpbnRmKHNjcmlwdCk7CiAgICAgICAgICAgIHNlbmRlci0+RXhlY3V0ZVNjcmlwdChzY3JpcHQsIE1pY3Jvc29mdDo6V1JMOjpDYWxsYmFjazxJQ29yZVdlYlZpZXcyRXhlY3V0ZVNjcmlwdENvbXBsZXRlZEhhbmRsZXI+KFsmXShIUkVTVUxUIGVycm9yQ29kZSwgTFBDV1NUUiByZXN1bHRPYmplY3RBc0pzb24pIC0+IEhSRVNVTFQgewogICAgICAgICAgICAgICAgcmV0dXJuIFNfT0s7CiAgICAgICAgICAgICAgICB9KS5HZXQoKSk7CgogICAgICAgICAgICByZXR1cm4gU19PSzsKICAgICAgICAgICAgfSkuR2V0KCksICZ0a25fTmF2aWdhdGlvbkNvbXBsZXRlZCkpOwoKICAgICAgICB2b2xhdGlsZSBpbnQgZHVtbXlGMTJFbmFibGVkID0gMDsKICAgICAgICBjb25zdCB3Y2hhcl90KiBpc0YxMkVuYWJsZWQgPSBMIm5fMUEzNkNEMjUtRTIwRi00RDBELUIxRTYtM0NDNDMwN0UxNDg4IjsKICAgICAgICBpZiAoaXNGMTJFbmFibGVkWzAgKyBkdW1teUYxMkVuYWJsZWRdID09IEwneScpIHsKICAgICAgICAgICAgRXZlbnRSZWdpc3RyYXRpb25Ub2tlbiB0a25fQWNjZWxlcmF0b3JLZXlQcmVzc2VkOwogICAgICAgICAgICB3aW5ydDo6Y2hlY2tfaHJlc3VsdChjcmVhdGVkQ29udHJvbGxlci0+YWRkX0FjY2VsZXJhdG9yS2V5UHJlc3NlZChNaWNyb3NvZnQ6OldSTDo6Q2FsbGJhY2s8SUNvcmVXZWJWaWV3MkFjY2VsZXJhdG9yS2V5UHJlc3NlZEV2ZW50SGFuZGxlcj4oW10oSUNvcmVXZWJWaWV3MkNvbnRyb2xsZXIqIHNlbmRlciwgSUNvcmVXZWJWaWV3MkFjY2VsZXJhdG9yS2V5UHJlc3NlZEV2ZW50QXJncyogYXJncykgLT4gSFJFU1VMVCB7CgogICAgICAgICAgICAgICAgQ09SRVdFQlZJRVcyX0tFWV9FVkVOVF9LSU5EIGtpbmQ7CiAgICAgICAgICAgICAgICB3aW5ydDo6Y2hlY2tfaHJlc3VsdChhcmdzLT5nZXRfS2V5RXZlbnRLaW5kKCZraW5kKSk7CiAgICAgICAgICAgICAgICBpZiAoa2luZCA9PSBDT1JFV0VCVklFVzJfS0VZX0VWRU5UX0tJTkRfS0VZX1VQKSB7CiAgICAgICAgICAgICAgICAgICAgVUlOVCBrZXk7CiAgICAgICAgICAgICAgICAgICAgd2lucnQ6OmNoZWNrX2hyZXN1bHQoYXJncy0+Z2V0X1ZpcnR1YWxLZXkoJmtleSkpOwogICAgICAgICAgICAgICAgICAgIGlmIChrZXkgPT0gVktfRjEyKSB7CiAgICAgICAgICAgICAgICAgICAgICAgIHdpbnJ0OjpjaGVja19ocmVzdWx0KGFyZ3MtPnB1dF9IYW5kbGVkKHRydWUpKTsKICAgICAgICAgICAgICAgICAgICAgICAgd2lucnQ6OmNvbV9wdHI8SUNvcmVXZWJWaWV3Mj4gd2VidmlldzsKICAgICAgICAgICAgICAgICAgICAgICAgd2lucnQ6OmNoZWNrX2hyZXN1bHQoc2VuZGVyLT5nZXRfQ29yZVdlYlZpZXcyKHdlYnZpZXcucHV0KCkpKTsKICAgICAgICAgICAgICAgICAgICAgICAgd2Vidmlldy0+T3BlbkRldlRvb2xzV2luZG93KCk7CiAgICAgICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgfQoKICAgICAgICAgICAgICAgIHJldHVybiBTX09LOwogICAgICAgICAgICAgICAgfSkuR2V0KCksICZ0a25fQWNjZWxlcmF0b3JLZXlQcmVzc2VkKSk7CiAgICAgICAgfQoKICAgICAgICAvKgogICAgICAgIEhXTkQgcGFyZW50V2luZG93ID0gbnVsbHB0cjsKICAgICAgICBjcmVhdGVkQ29udHJvbGxlci0+Z2V0X1BhcmVudFdpbmRvdygmcGFyZW50V2luZG93KTsKICAgICAgICA6OlNldExhc3RFcnJvcigwKTsKICAgICAgICBfX1duZFByb2MgPSByZWludGVycHJldF9jYXN0PExSRVNVTFQoKikoSFdORCwgVUlOVCwgV1BBUkFNLCBMUEFSQU0pPig6OkdldFdpbmRvd0xvbmdQdHJXKHBhcmVudFdpbmRvdywgR1dMUF9XTkRQUk9DKSk7CiAgICAgICAgaWYgKDo6R2V0TGFzdEVycm9yKCkgPT0gRVJST1JfU1VDQ0VTUyAmJiBfX1duZFByb2MpIHsKICAgICAgICAgICAgOjpTZXRXaW5kb3dMb25nUHRyVyhwYXJlbnRXaW5kb3csIEdXTFBfV05EUFJPQywgcmVpbnRlcnByZXRfY2FzdDxMT05HX1BUUj4oX1duZFByb2MpKTsKICAgICAgICB9CiAgICAgICAgKi8KICAgIH0KCiAgICA6OkRiZ1ByaW50ZihMIkhlbGxvIGZyb20gX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyQ29tcGxldGVkSGFuZGxlcl9JbnZva2UiKTsKICAgIHJldHVybiBfX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyQ29tcGxldGVkSGFuZGxlcl9JbnZva2UoX3RoaXMsIGVycm9yQ29kZSwgY3JlYXRlZENvbnRyb2xsZXIpOwp9CgpIUkVTVUxUKCpfX0lDb3JlV2ViVmlldzJFbnZpcm9ubWVudF9DcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyKShJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnQqLCBIV05ELCBJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXIqKSA9IG51bGxwdHI7CkhSRVNVTFQgU1RETUVUSE9EQ0FMTFRZUEUgX0lDb3JlV2ViVmlldzJFbnZpcm9ubWVudF9DcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyKElDb3JlV2ViVmlldzJFbnZpcm9ubWVudCogX3RoaXMsIEhXTkQgcGFyZW50V2luZG93LCBJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXIqIGNvbnRyb2xsZXJDb21wbGV0ZWRIYW5kbGVyKSB7ICAKICAgIHZvaWQqKiBjb250cm9sbGVyQ29tcGxldGVkSGFuZGxlclZ0YmwgPSAqKHZvaWQqKiopY29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXI7CiAgICBpZiAoY29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXJWdGJsWzNdICE9IF9JQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXJfSW52b2tlKSB7CiAgICAgICAgOjpEYmdQcmludGYoTCJQYXRjaGluZyBjb250cm9sbGVyQ29tcGxldGVkSGFuZGxlclZ0YmwiKTsKICAgICAgICBEV09SRCBvbGRQcm90ZWN0ID0gMDsKICAgICAgICBpZiAoOjpWaXJ0dWFsUHJvdGVjdCgmY29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXJWdGJsWzNdLCBzaXplb2YodWludHB0cl90KSwgUEFHRV9FWEVDVVRFX1JFQURXUklURSwgJm9sZFByb3RlY3QpKSB7CiAgICAgICAgICAgIF9fSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkNvbnRyb2xsZXJDb21wbGV0ZWRIYW5kbGVyX0ludm9rZSA9IHJlaW50ZXJwcmV0X2Nhc3Q8SFJFU1VMVCgqKShJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXIqLCBIUkVTVUxULCBJQ29yZVdlYlZpZXcyQ29udHJvbGxlciopPihjb250cm9sbGVyQ29tcGxldGVkSGFuZGxlclZ0YmxbM10pOwogICAgICAgICAgICBjb250cm9sbGVyQ29tcGxldGVkSGFuZGxlclZ0YmxbM10gPSBfSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkNvbnRyb2xsZXJDb21wbGV0ZWRIYW5kbGVyX0ludm9rZTsKICAgICAgICAgICAgOjpWaXJ0dWFsUHJvdGVjdCgmY29udHJvbGxlckNvbXBsZXRlZEhhbmRsZXJWdGJsWzNdLCBzaXplb2YodWludHB0cl90KSwgb2xkUHJvdGVjdCwgJm9sZFByb3RlY3QpOwogICAgICAgIH0KICAgIH0KCiAgICA6OkRiZ1ByaW50ZihMIkhlbGxvIGZyb20gX0lDb3JlV2ViVmlldzJFbnZpcm9ubWVudF9DcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyIik7CiAgICByZXR1cm4gX19JQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRfQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlcihfdGhpcywgcGFyZW50V2luZG93LCBjb250cm9sbGVyQ29tcGxldGVkSGFuZGxlcik7Cn0KCkhSRVNVTFQoKl9fSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50Q29tcGxldGVkSGFuZGxlcl9JbnZva2UpKElDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXIqIF90aGlzLCBIUkVTVUxULCBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnQqKSA9IG51bGxwdHI7CkhSRVNVTFQgU1RETUVUSE9EQ0FMTFRZUEUgX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXJfSW52b2tlKElDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXIqIF90aGlzLCBIUkVTVUxUIGVycm9yQ29kZSwgSUNvcmVXZWJWaWV3MkVudmlyb25tZW50KiBjcmVhdGVkRW52aXJvbm1lbnQpIHsKICAgIHZvaWQqKiBjcmVhdGVkRW52aXJvbm1lbnRWdGJsID0gKih2b2lkKioqKWNyZWF0ZWRFbnZpcm9ubWVudDsKICAgIGlmIChjcmVhdGVkRW52aXJvbm1lbnRWdGJsWzNdICE9IF9JQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRfQ3JlYXRlQ29yZVdlYlZpZXcyQ29udHJvbGxlcikgewogICAgICAgIDo6RGJnUHJpbnRmKEwiUGF0Y2hpbmcgY3JlYXRlZEVudmlyb25tZW50VnRibCIpOwogICAgICAgIERXT1JEIG9sZFByb3RlY3QgPSAwOwogICAgICAgIGlmICg6OlZpcnR1YWxQcm90ZWN0KCZjcmVhdGVkRW52aXJvbm1lbnRWdGJsWzNdLCBzaXplb2YodWludHB0cl90KSwgUEFHRV9FWEVDVVRFX1JFQURXUklURSwgJm9sZFByb3RlY3QpKSB7CiAgICAgICAgICAgIF9fSUNvcmVXZWJWaWV3MkVudmlyb25tZW50X0NyZWF0ZUNvcmVXZWJWaWV3MkNvbnRyb2xsZXIgPSByZWludGVycHJldF9jYXN0PEhSRVNVTFQoKikoSUNvcmVXZWJWaWV3MkVudmlyb25tZW50KiwgSFdORCwgSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkNvbnRyb2xsZXJDb21wbGV0ZWRIYW5kbGVyKik+KGNyZWF0ZWRFbnZpcm9ubWVudFZ0YmxbM10pOwogICAgICAgICAgICBjcmVhdGVkRW52aXJvbm1lbnRWdGJsWzNdID0gX0lDb3JlV2ViVmlldzJFbnZpcm9ubWVudF9DcmVhdGVDb3JlV2ViVmlldzJDb250cm9sbGVyOwogICAgICAgICAgICA6OlZpcnR1YWxQcm90ZWN0KCZjcmVhdGVkRW52aXJvbm1lbnRWdGJsWzNdLCBzaXplb2YodWludHB0cl90KSwgb2xkUHJvdGVjdCwgJm9sZFByb3RlY3QpOwogICAgICAgIH0KICAgIH0KCiAgICA6OkRiZ1ByaW50ZihMIkhlbGxvIGZyb20gX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXJfSW52b2tlIik7CiAgICByZXR1cm4gX19JQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRDb21wbGV0ZWRIYW5kbGVyX0ludm9rZShfdGhpcywgZXJyb3JDb2RlLCBjcmVhdGVkRW52aXJvbm1lbnQpOwp9CgpIUkVTVUxUKCpfX0NyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnMpKFBDV1NUUiwgUENXU1RSLCBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zKiwgSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50Q29tcGxldGVkSGFuZGxlciopID0gbnVsbHB0cjsKU1REQVBJIF9DcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zKFBDV1NUUiBicm93c2VyRXhlY3V0YWJsZUZvbGRlciwgUENXU1RSIHVzZXJEYXRhRm9sZGVyLCBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zKiBlbnZpcm9ubWVudE9wdGlvbnMsIElDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXIqIGVudmlyb25tZW50Q3JlYXRlZEhhbmRsZXIpIHsgIAogICAgdm9pZCoqIGVudmlyb25tZW50Q3JlYXRlZEhhbmRsZXJWdGJsID0gKih2b2lkKioqKWVudmlyb25tZW50Q3JlYXRlZEhhbmRsZXI7CiAgICBpZiAoZW52aXJvbm1lbnRDcmVhdGVkSGFuZGxlclZ0YmxbM10gIT0gX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXJfSW52b2tlKSB7CiAgICAgICAgOjpEYmdQcmludGYoTCJQYXRjaGluZyBlbnZpcm9ubWVudENyZWF0ZWRIYW5kbGVyVnRibCIpOwogICAgICAgIERXT1JEIG9sZFByb3RlY3QgPSAwOwogICAgICAgIGlmICg6OlZpcnR1YWxQcm90ZWN0KCZlbnZpcm9ubWVudENyZWF0ZWRIYW5kbGVyVnRibFszXSwgc2l6ZW9mKHVpbnRwdHJfdCksIFBBR0VfRVhFQ1VURV9SRUFEV1JJVEUsICZvbGRQcm90ZWN0KSkgewogICAgICAgICAgICBfX0lDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXJfSW52b2tlID0gcmVpbnRlcnByZXRfY2FzdDxIUkVTVUxUKCopKElDb3JlV2ViVmlldzJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudENvbXBsZXRlZEhhbmRsZXIqLCBIUkVTVUxULCBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnQqKT4oZW52aXJvbm1lbnRDcmVhdGVkSGFuZGxlclZ0YmxbM10pOwogICAgICAgICAgICBlbnZpcm9ubWVudENyZWF0ZWRIYW5kbGVyVnRibFszXSA9IF9JQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRDb21wbGV0ZWRIYW5kbGVyX0ludm9rZTsKICAgICAgICAgICAgOjpWaXJ0dWFsUHJvdGVjdCgmZW52aXJvbm1lbnRDcmVhdGVkSGFuZGxlclZ0YmxbM10sIHNpemVvZih1aW50cHRyX3QpLCBvbGRQcm90ZWN0LCAmb2xkUHJvdGVjdCk7CiAgICAgICAgfQogICAgfQoKICAgIGlmICghX19DcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zKSB7CiAgICAgICAgYXV0byBoTW9kID0gOjpHZXRNb2R1bGVIYW5kbGVXKEwiV2ViVmlldzJMb2FkZXIuZGxsIik7CiAgICAgICAgd2lucnQ6OmNoZWNrX2Jvb2woaE1vZCk7CiAgICAgICAgX19DcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zID0gcmVpbnRlcnByZXRfY2FzdDxIUkVTVUxUKCopKFBDV1NUUiwgUENXU1RSLCBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zKiwgSUNvcmVXZWJWaWV3MkNyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50Q29tcGxldGVkSGFuZGxlciopPig6OkdldFByb2NBZGRyZXNzKGhNb2QsICJDcmVhdGVDb3JlV2ViVmlldzJFbnZpcm9ubWVudFdpdGhPcHRpb25zIikpOwogICAgICAgIHdpbnJ0OjpjaGVja19ib29sKF9fQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucyk7CiAgICB9CiAgICA6OkRiZ1ByaW50ZihMIkhlbGxvIGZyb20gX0NyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnMiKTsKICAgIHJldHVybiBwQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucyhicm93c2VyRXhlY3V0YWJsZUZvbGRlciwgdXNlckRhdGFGb2xkZXIsIGVudmlyb25tZW50T3B0aW9ucywgZW52aXJvbm1lbnRDcmVhdGVkSGFuZGxlcik7Cn0KI3ByYWdtYSBlbmRyZWdpb24KCiNwcmFnbWEgcmVnaW9uICJBcHBWZXJpZmllciBpbmZyYXN0cnVjdHVyZSIKI2RlZmluZSBETExfUFJPQ0VTU19WRVJJRklFUiA0Cgp0eXBlZGVmIHN0cnVjdCBfUlRMX1ZFUklGSUVSX1RIVU5LX0RFU0NSSVBUT1IgewogICAgUENIQVIgVGh1bmtOYW1lOwogICAgUFZPSUQgVGh1bmtPbGRBZGRyZXNzOwogICAgUFZPSUQgVGh1bmtOZXdBZGRyZXNzOwp9IFJUTF9WRVJJRklFUl9USFVOS19ERVNDUklQVE9SLCAqIFBSVExfVkVSSUZJRVJfVEhVTktfREVTQ1JJUFRPUjsKCnR5cGVkZWYgc3RydWN0IF9SVExfVkVSSUZJRVJfRExMX0RFU0NSSVBUT1IgewogICAgUFdDSEFSIERsbE5hbWU7CiAgICBVTE9ORyBEbGxGbGFnczsKICAgIFBWT0lEIERsbEFkZHJlc3M7CiAgICBQUlRMX1ZFUklGSUVSX1RIVU5LX0RFU0NSSVBUT1IgRGxsVGh1bmtzOwp9IFJUTF9WRVJJRklFUl9ETExfREVTQ1JJUFRPUiwgKiBQUlRMX1ZFUklGSUVSX0RMTF9ERVNDUklQVE9SOwoKdHlwZWRlZiB2b2lkIChOVEFQSSogUlRMX1ZFUklGSUVSX0RMTF9MT0FEX0NBTExCQUNLKSAoCiAgICBQV1NUUiBEbGxOYW1lLAogICAgUFZPSUQgRGxsQmFzZSwKICAgIFNJWkVfVCBEbGxTaXplLAogICAgUFZPSUQgUmVzZXJ2ZWQpOwp0eXBlZGVmIHZvaWQgKE5UQVBJKiBSVExfVkVSSUZJRVJfRExMX1VOTE9BRF9DQUxMQkFDSykgKAogICAgUFdTVFIgRGxsTmFtZSwKICAgIFBWT0lEIERsbEJhc2UsCiAgICBTSVpFX1QgRGxsU2l6ZSwKICAgIFBWT0lEIFJlc2VydmVkKTsKdHlwZWRlZiB2b2lkIChOVEFQSSogUlRMX1ZFUklGSUVSX05URExMSEVBUEZSRUVfQ0FMTEJBQ0spICgKICAgIFBWT0lEIEFsbG9jYXRpb25CYXNlLAogICAgU0laRV9UIEFsbG9jYXRpb25TaXplKTsKCnR5cGVkZWYgc3RydWN0IF9SVExfVkVSSUZJRVJfUFJPVklERVJfREVTQ1JJUFRPUiB7CiAgICBVTE9ORyBMZW5ndGg7CiAgICBQUlRMX1ZFUklGSUVSX0RMTF9ERVNDUklQVE9SIFByb3ZpZGVyRGxsczsKICAgIFJUTF9WRVJJRklFUl9ETExfTE9BRF9DQUxMQkFDSyBQcm92aWRlckRsbExvYWRDYWxsYmFjazsKICAgIFJUTF9WRVJJRklFUl9ETExfVU5MT0FEX0NBTExCQUNLIFByb3ZpZGVyRGxsVW5sb2FkQ2FsbGJhY2s7CgogICAgUFdTVFIgVmVyaWZpZXJJbWFnZTsKICAgIFVMT05HIFZlcmlmaWVyRmxhZ3M7CiAgICBVTE9ORyBWZXJpZmllckRlYnVnOwoKICAgIFBWT0lEIFJ0bHBHZXRTdGFja1RyYWNlQWRkcmVzczsKICAgIFBWT0lEIFJ0bHBEZWJ1Z1BhZ2VIZWFwQ3JlYXRlOwogICAgUFZPSUQgUnRscERlYnVnUGFnZUhlYXBEZXN0cm95OwoKICAgIFJUTF9WRVJJRklFUl9OVERMTEhFQVBGUkVFX0NBTExCQUNLIFByb3ZpZGVyTnRkbGxIZWFwRnJlZUNhbGxiYWNrOwp9IFJUTF9WRVJJRklFUl9QUk9WSURFUl9ERVNDUklQVE9SOwoKSE1PRFVMRSBIb29rTG9hZExpYnJhcnlFeFcoTFBDV1NUUiBscExpYkZpbGVOYW1lLCBIQU5ETEUgaEZpbGUsIERXT1JEIGR3RmxhZ3MpOwoKUlRMX1ZFUklGSUVSX0RMTF9ERVNDUklQVE9SIG5vSG9va3N7fTsKClJUTF9WRVJJRklFUl9USFVOS19ERVNDUklQVE9SIGtlcm5lbGJhc2VIb29rc1tdID0KewogICAgeyAoUENIQVIpIkxvYWRMaWJyYXJ5RXhXIiwgbnVsbHB0ciwgSG9va0xvYWRMaWJyYXJ5RXhXfSwKICAgIHsgbnVsbHB0ciwgbnVsbHB0ciwgbnVsbHB0ciB9LAp9OwoKUlRMX1ZFUklGSUVSX0RMTF9ERVNDUklQVE9SIGRsbHNbXSA9CnsKICAgIHsgKFBXQ0hBUilMImtlcm5lbGJhc2UuZGxsIiwgMCwgbnVsbHB0ciwga2VybmVsYmFzZUhvb2tzIH0sCiAgICB7IG51bGxwdHIsIDAsIG51bGxwdHIsIG51bGxwdHIgfSwKfTsKClJUTF9WRVJJRklFUl9QUk9WSURFUl9ERVNDUklQVE9SIGRlc2MgPQp7CiAgICBzaXplb2YoZGVzYyksCiAgICBkbGxzLAogICAgW10oYXV0bywgYXV0bywgYXV0bywgYXV0bykge30sCiAgICBbXShhdXRvLCBhdXRvLCBhdXRvLCBhdXRvKSB7fSwKICAgIG51bGxwdHIsIDAsIDAsCiAgICBudWxscHRyLCBudWxscHRyLCBudWxscHRyLAogICAgW10oYXV0bywgYXV0bykge30sCn07CgojcHJhZ21hIGVuZHJlZ2lvbgoKQk9PTCBXSU5BUEkgRGxsTWFpbihISU5TVEFOQ0UgaGluc3RETEwsIERXT1JEIGZkd1JlYXNvbiwgTFBWT0lEIGxwdlJlc2VydmVkKSB7CiAgICBVTlJFRkVSRU5DRURfUEFSQU1FVEVSKGxwdlJlc2VydmVkKTsKCiAgICBzd2l0Y2ggKGZkd1JlYXNvbikgewogICAgY2FzZSBETExfUFJPQ0VTU19BVFRBQ0g6CiAgICAgICAgOjpEaXNhYmxlVGhyZWFkTGlicmFyeUNhbGxzKGhpbnN0RExMKTsKICAgICAgICBicmVhazsKICAgIGNhc2UgRExMX1RIUkVBRF9BVFRBQ0g6CiAgICAgICAgYnJlYWs7CiAgICBjYXNlIERMTF9USFJFQURfREVUQUNIOgogICAgICAgIGJyZWFrOwogICAgY2FzZSBETExfUFJPQ0VTU19ERVRBQ0g6CiAgICAgICAgYnJlYWs7CiAgICBjYXNlIERMTF9QUk9DRVNTX1ZFUklGSUVSOgogICAgICAgICooUFZPSUQqKWxwdlJlc2VydmVkID0gJmRlc2M7CiAgICAgICAgYnJlYWs7CiAgICB9CiAgICByZXR1cm4gdHJ1ZTsKfQoKLy8gRGV0b3VyIGZ1bmN0aW9uCkhSRVNVTFQgV0lOQVBJIERldG91ckNyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnMoCiAgICBQQ1dTVFIgYnJvd3NlckV4ZWN1dGFibGVGb2xkZXIsCiAgICBQQ1dTVFIgdXNlckRhdGFGb2xkZXIsCiAgICBJQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRPcHRpb25zKiBlbnZpcm9ubWVudE9wdGlvbnMsCiAgICBJQ29yZVdlYlZpZXcyQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRDb21wbGV0ZWRIYW5kbGVyKiBlbnZpcm9ubWVudENyZWF0ZWRIYW5kbGVyKQp7CiAgICAvLyBNb2RpZnkgcGFyYW1ldGVycyBoZXJlLCBlLmcuLCBmb3JjaW5nIGEgY3VzdG9tIHVzZXJEYXRhRm9sZGVyCiAgICByZXR1cm4gcENyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnMoCiAgICAgICAgYnJvd3NlckV4ZWN1dGFibGVGb2xkZXIsCiAgICAgICAgTCJDOlxcQ3VzdG9tXFxEYXRhXFxQYXRoIiwgLy8gRXhhbXBsZTogT3ZlcnJpZGUKICAgICAgICBlbnZpcm9ubWVudE9wdGlvbnMsCiAgICAgICAgZW52aXJvbm1lbnRDcmVhdGVkSGFuZGxlcgogICAgKTsKfQoKSE1PRFVMRSBXSU5BUEkgSG9va0xvYWRMaWJyYXJ5RXhXKExQQ1dTVFIgbHBMaWJGaWxlTmFtZSwgSEFORExFIGhGaWxlLCBEV09SRCBkd0ZsYWdzKQp7CiAgICBhdXRvIHJlc3VsdCA9IDo6TG9hZExpYnJhcnlFeFcobHBMaWJGaWxlTmFtZSwgaEZpbGUsIGR3RmxhZ3MpOwogICAgRGJnUHJpbnRmKEwiTk9QOiBMb2FkZWRMaWJyYXJ5RXhXIC0gJWxzIiwgbHBMaWJGaWxlTmFtZSk7CgogICAgaWYgKGxzdHJjbXBXKGxwTGliRmlsZU5hbWUsIEwiQzpcXFdpbmRvd3NcXHN5c3RlbTMyXFx1eHRoZW1lLmRsbCIpID09IDApCiAgICB7CiAgICAgICAgTUhfU1RBVFVTIHN0YXR1cyA9IE1IX0luaXRpYWxpemUoKTsKICAgICAgICBpZiAoc3RhdHVzICE9IE1IX09LKQogICAgICAgIHsKICAgICAgICAgICAgRGJnUHJpbnRmKEwiTk9QOiBFcnJvciBpbml0aWFsaXNpbmcgTWluSG9vayAweCUwOFgiLCBzdGF0dXMpOwogICAgICAgICAgICByZXR1cm4gcmVzdWx0OwogICAgICAgIH0KCiAgICAgICAgc3RhdHVzID0gTUhfQ3JlYXRlSG9va0FwaUV4KEwiV2ViVmlldzJMb2FkZXIiLCAiQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucyIsICZfQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucywgcmVpbnRlcnByZXRfY2FzdDx2b2lkKio+KCZwQ3JlYXRlQ29yZVdlYlZpZXcyRW52aXJvbm1lbnRXaXRoT3B0aW9ucyksIHJlaW50ZXJwcmV0X2Nhc3Q8dm9pZCoqPigmcENyZWF0ZUNvcmVXZWJWaWV3MkVudmlyb25tZW50V2l0aE9wdGlvbnNUYXJnZXQpKTsKICAgICAgICBpZiAoc3RhdHVzICE9IE1IX09LKQogICAgICAgIHsKICAgICAgICAgICAgRGJnUHJpbnRmKEwiTk9QOiBFcnJvciBjcmVhdGluZyBob29rIDB4JTA4WCIsIHN0YXR1cyk7CiAgICAgICAgICAgIHJldHVybiByZXN1bHQ7CiAgICAgICAgfQoKICAgICAgICBzdGF0dXMgPSBNSF9FbmFibGVIb29rKE1IX0FMTF9IT09LUyk7CiAgICAgICAgaWYgKHN0YXR1cyAhPSBNSF9PSykKICAgICAgICB7CiAgICAgICAgICAgIERiZ1ByaW50ZihMIk5PUDogRXJyb3IgZW5hYmxpbmcgaG9vayAweCUwOFgiLCBzdGF0dXMpOwogICAgICAgICAgICByZXR1cm4gcmVzdWx0OwogICAgICAgIH0KICAgIH0KCiAgICByZXR1cm4gcmVzdWx0Owp9
-'@
-          [IO.File]::WriteAllBytes(
-            "$env:GITHUB_WORKSPACE\NOP\worker\dllmain.cpp",
-            [Convert]::FromBase64String($b64)
+          $path = "NOP\worker\dllmain.cpp"
+          $lines = Get-Content -Path $path
+
+          $start = -1
+          $end = -1
+
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($start -lt 0 -and $lines[$i] -match 'const cssClass =') {
+              $start = $i
+            }
+            if ($lines[$i] -match 'styleElement\.appendChild') {
+              $end = $i
+              break
+            }
+          }
+
+          if ($start -lt 0 -or $end -lt 0 -or $end -le $start) {
+            throw "Could not locate CSS block in dllmain.cpp"
+          }
+
+          $before = @()
+          if ($start -gt 0) {
+            $before = $lines[0..($start - 1)]
+          }
+
+          $after = $lines[$end..($lines.Count - 1)]
+
+          $newCss = @(
+            'const cssClass = \"\'
+            '[data-message-ad-id] { display: none !important; }\";\n\'
           )
+
+          $out = @()
+          $out += $before
+          $out += $newCss
+          $out += $after
+
+          [System.IO.File]::WriteAllLines(
+            (Resolve-Path $path),
+            $out,
+            [System.Text.UTF8Encoding]::new($true)
+          )
+
+          $content = Get-Content -Path $path -Raw
+          $content = $content.Replace(
+            'const wchar_t* isF12Enabled = L"y_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";',
+            'const wchar_t* isF12Enabled = L"n_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";'
+          )
+          [System.IO.File]::WriteAllText(
+            (Resolve-Path $path),
+            $content,
+            [System.Text.UTF8Encoding]::new($true)
+          )
+
+          Write-Host "Patched CSS:"
+          Select-String -Path $path -Pattern "data-message-ad-id"
 
       - name: Restore native packages
         shell: cmd
         run: nuget restore NOP\worker\packages.config -PackagesDirectory packages -NonInteractive
 
       - name: Build x64 worker DLL
-        shell: cmd
-        run: msbuild NOP\worker\worker.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:OutDir="%GITHUB_WORKSPACE%\out\"
+        shell: pwsh
+        run: |
+          $outDir = Join-Path $env:GITHUB_WORKSPACE "out"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          & msbuild "NOP\worker\worker.vcxproj" /m /p:Configuration=Release /p:Platform=x64 "/p:OutDir=$outDir\"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Prepare ready package
-        shell: powershell
+        shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\package" | Out-Null
-          Copy-Item "$env:GITHUB_WORKSPACE\out\dxgi.dll" "$env:GITHUB_WORKSPACE\package\NewOutlookPatcher.dll"
+          $package = Join-Path $env:GITHUB_WORKSPACE "package"
+          $builtDll = Join-Path $env:GITHUB_WORKSPACE "out\dxgi.dll"
 
-          @'
-@echo off
-setlocal EnableExtensions
-title Outlook Ad Hider - INSTALL
+          if (-not (Test-Path $builtDll)) {
+            throw "Built dxgi.dll was not found."
+          }
 
-net session >nul 2>&1
-if not "%errorlevel%"=="0" (
-  powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-  exit /b
-)
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item $builtDll (Join-Path $package "NewOutlookPatcher.dll") -Force
 
-if not exist "%~dp0NewOutlookPatcher.dll" (
-  echo Missing NewOutlookPatcher.dll
-  pause
-  exit /b 1
-)
+          $install = @"
+          @echo off
+          setlocal EnableExtensions
+          title Outlook Ad Hider - INSTALL
 
-taskkill /F /IM olk.exe /T >nul 2>&1
+          net session >nul 2>&1
+          if not "%errorlevel%"=="0" (
+            powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+            exit /b
+          )
 
-copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul
-if errorlevel 1 (
-  echo Failed to copy DLL to System32.
-  pause
-  exit /b 1
-)
+          if not exist "%~dp0NewOutlookPatcher.dll" (
+            echo Missing NewOutlookPatcher.dll
+            pause
+            exit /b 1
+          )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64);" ^
-"$p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe';" ^
-"$k=$base.CreateSubKey($p);" ^
-"$g=$k.GetValue('GlobalFlag',$null);" ^
-"if($null -eq $g){$g=0};" ^
-"$k.SetValue('GlobalFlag',([int]$g -bor 0x100),[Microsoft.Win32.RegistryValueKind]::DWord);" ^
-"$v=[string]$k.GetValue('VerifierDlls','');" ^
-"if($v -notmatch '(^|\s)NewOutlookPatcher\.dll($|\s)'){$v=($v+' NewOutlookPatcher.dll').Trim()};" ^
-"$k.SetValue('VerifierDlls',$v,[Microsoft.Win32.RegistryValueKind]::String);" ^
-"$k.Close();$base.Close()"
+          taskkill /F /IM olk.exe /T >nul 2>&1
+          copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul
 
-echo.
-echo Outlook ad hider installed.
-echo Opening Outlook normally...
-start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
-echo.
-pause
-'@ | Set-Content -Encoding ASCII "$env:GITHUB_WORKSPACE\package\INSTALL-Outlook-Ad-Hider.cmd"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); $p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe'; $k=$base.CreateSubKey($p); $g=$k.GetValue('GlobalFlag',$null); if($null -eq $g){$g=0}; $k.SetValue('GlobalFlag',([int]$g -bor 0x100),[Microsoft.Win32.RegistryValueKind]::DWord); $v=[string]$k.GetValue('VerifierDlls',''); if($v -notmatch '(^|\s)NewOutlookPatcher\.dll($|\s)'){$v=($v+' NewOutlookPatcher.dll').Trim()}; $k.SetValue('VerifierDlls',$v,[Microsoft.Win32.RegistryValueKind]::String); $k.Close(); $base.Close()"
 
-          @'
-@echo off
-setlocal EnableExtensions
-title Outlook Ad Hider - UNINSTALL
+          echo.
+          echo Outlook ad hider installed.
+          echo Opening Outlook...
+          start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
+          echo.
+          pause
+          "@
 
-net session >nul 2>&1
-if not "%errorlevel%"=="0" (
-  powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-  exit /b
-)
+          $uninstall = @"
+          @echo off
+          setlocal EnableExtensions
+          title Outlook Ad Hider - UNINSTALL
 
-taskkill /F /IM olk.exe /T >nul 2>&1
+          net session >nul 2>&1
+          if not "%errorlevel%"=="0" (
+            powershell -NoProfile -WindowStyle Hidden -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+            exit /b
+          )
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-"$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64);" ^
-"$p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe';" ^
-"$k=$base.OpenSubKey($p,$true);" ^
-"if($k){" ^
-" $v=[string]$k.GetValue('VerifierDlls','');" ^
-" $parts=@($v -split '\s+' | Where-Object {$_ -and $_ -ne 'NewOutlookPatcher.dll'});" ^
-" if($parts.Count -eq 0){$k.DeleteValue('VerifierDlls',$false);$g=$k.GetValue('GlobalFlag',$null);if($null -ne $g){$n=[int]$g -band (-bnot 0x100);if($n -eq 0){$k.DeleteValue('GlobalFlag',$false)}else{$k.SetValue('GlobalFlag',$n,[Microsoft.Win32.RegistryValueKind]::DWord)}}}else{$k.SetValue('VerifierDlls',($parts -join ' '),[Microsoft.Win32.RegistryValueKind]::String)};" ^
-" $k.Close()" ^
-"};" ^
-"$base.Close()"
+          taskkill /F /IM olk.exe /T >nul 2>&1
 
-del /F /Q "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "$base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64); $p='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\olk.exe'; $k=$base.OpenSubKey($p,$true); if($k){ $v=[string]$k.GetValue('VerifierDlls',''); $parts=@($v -split '\s+' | Where-Object {$_ -and $_ -ne 'NewOutlookPatcher.dll'}); if($parts.Count -eq 0){$k.DeleteValue('VerifierDlls',$false); $g=$k.GetValue('GlobalFlag',$null); if($null -ne $g){$n=[int]$g -band (-bnot 0x100); if($n -eq 0){$k.DeleteValue('GlobalFlag',$false)}else{$k.SetValue('GlobalFlag',$n,[Microsoft.Win32.RegistryValueKind]::DWord)}}}else{$k.SetValue('VerifierDlls',($parts -join ' '),[Microsoft.Win32.RegistryValueKind]::String)}; $k.Close() }; $base.Close()"
 
-echo.
-echo Outlook ad hider uninstalled.
-start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
-echo.
-pause
-'@ | Set-Content -Encoding ASCII "$env:GITHUB_WORKSPACE\package\UNINSTALL-Outlook-Ad-Hider.cmd"
+          del /F /Q "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
 
-          @'
-This build is based on nicbedford/NewOutlookPatcher hooking updates.
-Customization: only the Outlook message-list ad row is hidden.
-Selector: [data-message-ad-id]
-No Chrome files or Chrome cache are touched.
-'@ | Set-Content -Encoding UTF8 "$env:GITHUB_WORKSPACE\package\README.txt"
+          echo.
+          echo Outlook ad hider uninstalled.
+          start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
+          echo.
+          pause
+          "@
+
+          $readme = @"
+          Outlook Ad Hider
+          -----------------
+          This build hides only the New Outlook message-list advertising row.
+
+          CSS selector:
+          [data-message-ad-id] { display: none !important; }
+
+          Chrome and Chrome cache are not touched.
+          "@
+
+          Set-Content -Path (Join-Path $package "INSTALL-Outlook-Ad-Hider.cmd") -Value $install -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UNINSTALL-Outlook-Ad-Hider.cmd") -Value $uninstall -Encoding ASCII
+          Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
       - name: Upload ready package
         uses: actions/upload-artifact@v4
