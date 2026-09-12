@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V5
+name: Build Outlook Ad Hider V6
 
 on:
   workflow_dispatch:
@@ -17,15 +17,17 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V5
+      - name: Patch worker for Outlook V6
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V5 native window hook: keep the normal V3 behavior, but lower only
-          # Outlook Host's WM_GETMINMAXINFO minimum TRACKING height to 500 px.
-          # We call Outlook's original WndProc first, then lower the value it set.
+          # V6 native window hook: keep the working V5 height fix and also enforce
+          # a minimum native Outlook Host width of 943 px. On this machine, native
+          # width 942 maps to WebView innerWidth 918 (folder pane removed), while
+          # innerWidth 919 keeps the folder pane. We call Outlook's original WndProc
+          # first, then adjust only the tracking limits.
           $nativeNeedle = @'
               OutputDebugStringW(L"\r\n");
           }
@@ -37,8 +39,9 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V5 - allow the top-level Outlook Host window to be resized
-          // vertically below Outlook's normal minimum. Width is intentionally untouched.
+          // MUSICBANTER V6 - keep V5's 500 px minimum height and prevent the
+          // horizontal size from crossing Outlook's folder-pane breakpoint.
+          static const LONG MB_MIN_OUTLOOK_WIDTH = 943;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
           static HWND g_mbOutlookHost = nullptr;
           static WNDPROC g_mbOriginalOutlookWndProc = nullptr;
@@ -58,9 +61,20 @@ jobs:
                   LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
 
                   auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
-                  if (info != nullptr && info->ptMinTrackSize.y > MB_MIN_OUTLOOK_HEIGHT)
+                  if (info != nullptr)
                   {
-                      info->ptMinTrackSize.y = MB_MIN_OUTLOOK_HEIGHT;
+                      // Keep enough native width so WebView innerWidth never drops
+                      // below the 919 px folder-pane breakpoint observed in Outlook.
+                      if (info->ptMinTrackSize.x < MB_MIN_OUTLOOK_WIDTH)
+                      {
+                          info->ptMinTrackSize.x = MB_MIN_OUTLOOK_WIDTH;
+                      }
+
+                      // Preserve the working V5 vertical resize fix.
+                      if (info->ptMinTrackSize.y > MB_MIN_OUTLOOK_HEIGHT)
+                      {
+                          info->ptMinTrackSize.y = MB_MIN_OUTLOOK_HEIGHT;
+                      }
                   }
 
                   return result;
@@ -117,7 +131,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V5: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V6: Outlook Host window not found yet");
                   return;
               }
 
@@ -128,7 +142,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V5: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V6: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -147,7 +161,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V5: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V6: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -158,7 +172,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V5: Outlook minimum height limited to %ld px", MB_MIN_OUTLOOK_HEIGHT);
+              DbgPrintf(L"NOP V6: Outlook minimum size set to %ld x %ld px", MB_MIN_OUTLOOK_WIDTH, MB_MIN_OUTLOOK_HEIGHT);
           }
 
           // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
@@ -265,10 +279,11 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V5 markers:"
+          Write-Host "V6 markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
+          Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_WIDTH"
           Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_HEIGHT"
-          Select-String -Path $path -Pattern "Outlook minimum height limited"
+          Select-String -Path $path -Pattern "Outlook minimum size set"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -285,7 +300,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V5 package
+      - name: Prepare V6 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -301,7 +316,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V5 - UPDATE
+          title Outlook Ad Hider V6 - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -320,7 +335,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V3 DLL with V5...
+          echo Replacing V5 DLL with V6...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -346,37 +361,42 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V5 DLL INSTALLED SUCCESSFULLY
+          echo   V6 DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V5 keeps the V3 ad fix and lowers only the
-          echo Outlook Host minimum tracking height to 500 px.
+          echo V6 keeps the V3 ad fix and the V5 500 px
+          echo minimum height, and sets the minimum window
+          echo width to 943 px to keep the folder pane visible.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
           echo.
-          echo Try resizing Outlook vertically with the mouse.
+          echo Try resizing Outlook horizontally and vertically with the mouse.
           echo.
           pause
           '@
 
           $readme = @'
-          Outlook Ad Hider V5
+          Outlook Ad Hider V6
           --------------------
-          Base: working V3 behavior.
+          Base: working V5 behavior.
 
           Keeps the proven ad rule:
           [data-message-ad-id] { display: none !important; }
 
-          Adds one native window change:
+          Native window behavior:
           - Hooks the top-level window class "Outlook Host".
           - On WM_GETMINMAXINFO, lets Outlook calculate its normal limits first.
-          - If Outlook asks for a minimum tracking height above 500 px, V5 lowers
-            only that height to 500 px.
-          - Width is NOT modified.
+          - Keeps the working V5 minimum tracking height of 500 px.
+          - Enforces a minimum native tracking width of 943 px.
+          - On this PC, 942 px native width produced WebView innerWidth 918 where
+            the folder pane disappears; 943 px keeps it at/above the 919 px
+            breakpoint where the folder pane remains present.
 
           This build does NOT contain the experimental V4 matchMedia/ResizeObserver
-          layout patch and does not inject any folder-pane JavaScript.
+          layout patch and does not inject any folder-pane JavaScript. The folder
+          pane is preserved only by preventing the window from crossing its width
+          breakpoint.
 
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
@@ -384,12 +404,12 @@ jobs:
           If Outlook behaves incorrectly, reinstall the saved V3 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V5.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V6.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V5 package
+      - name: Upload V6 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V5
+          name: Outlook-Ad-Hider-V6
           path: package
           if-no-files-found: error
