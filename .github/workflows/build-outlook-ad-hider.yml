@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V4
+name: Build Outlook Ad Hider V5
 
 on:
   workflow_dispatch:
@@ -17,199 +17,190 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for V4
+      - name: Patch worker for Outlook V5
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # Keep the proven Outlook ad selector.
-          $cssPattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
-          $cssReplacement = @'
+          # V5 native window hook: keep the normal V3 behavior, but lower only
+          # Outlook Host's WM_GETMINMAXINFO minimum TRACKING height to 500 px.
+          # We call Outlook's original WndProc first, then lower the value it set.
+          $nativeNeedle = @'
+              OutputDebugStringW(L"\r\n");
+          }
+
+          // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
+          '@
+
+          $nativeReplacement = @'
+              OutputDebugStringW(L"\r\n");
+          }
+
+          // MUSICBANTER V5 - allow the top-level Outlook Host window to be resized
+          // vertically below Outlook's normal minimum. Width is intentionally untouched.
+          static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
+          static HWND g_mbOutlookHost = nullptr;
+          static WNDPROC g_mbOriginalOutlookWndProc = nullptr;
+
+          LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+          {
+              WNDPROC original = g_mbOriginalOutlookWndProc;
+
+              if (!original)
+              {
+                  return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
+              }
+
+              if (uMsg == WM_GETMINMAXINFO)
+              {
+                  // Let Outlook calculate its normal limits first.
+                  LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+
+                  auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+                  if (info != nullptr && info->ptMinTrackSize.y > MB_MIN_OUTLOOK_HEIGHT)
+                  {
+                      info->ptMinTrackSize.y = MB_MIN_OUTLOOK_HEIGHT;
+                  }
+
+                  return result;
+              }
+
+              return ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+          }
+
+          struct MBOutlookWindowSearch
+          {
+              DWORD processId;
+              HWND window;
+          };
+
+          BOOL CALLBACK MBFindOutlookHostEnumProc(HWND hWnd, LPARAM lParam)
+          {
+              auto* search = reinterpret_cast<MBOutlookWindowSearch*>(lParam);
+              if (!search)
+              {
+                  return TRUE;
+              }
+
+              DWORD processId = 0;
+              ::GetWindowThreadProcessId(hWnd, &processId);
+              if (processId != search->processId)
+              {
+                  return TRUE;
+              }
+
+              WCHAR className[128] = {};
+              if (::GetClassNameW(hWnd, className, ARRAYSIZE(className)) <= 0)
+              {
+                  return TRUE;
+              }
+
+              if (::lstrcmpW(className, L"Outlook Host") == 0)
+              {
+                  search->window = hWnd;
+                  return FALSE;
+              }
+
+              return TRUE;
+          }
+
+          void MBInstallOutlookMinHeightHook()
+          {
+              if (g_mbOutlookHost != nullptr && g_mbOriginalOutlookWndProc != nullptr)
+              {
+                  return;
+              }
+
+              MBOutlookWindowSearch search = { ::GetCurrentProcessId(), nullptr };
+              ::EnumWindows(MBFindOutlookHostEnumProc, reinterpret_cast<LPARAM>(&search));
+
+              if (!search.window)
+              {
+                  DbgPrintf(L"NOP V5: Outlook Host window not found yet");
+                  return;
+              }
+
+              ::SetLastError(0);
+              auto original = reinterpret_cast<WNDPROC>(
+                  ::GetWindowLongPtrW(search.window, GWLP_WNDPROC)
+              );
+
+              if (!original && ::GetLastError() != ERROR_SUCCESS)
+              {
+                  DbgPrintf(L"NOP V5: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  return;
+              }
+
+              // Publish the original proc before installing ours so the hook is safe
+              // even if a window message arrives immediately after SetWindowLongPtrW.
+              g_mbOriginalOutlookWndProc = original;
+
+              ::SetLastError(0);
+              auto previous = reinterpret_cast<WNDPROC>(
+                  ::SetWindowLongPtrW(
+                      search.window,
+                      GWLP_WNDPROC,
+                      reinterpret_cast<LONG_PTR>(MBOutlookHostWndProc)
+                  )
+              );
+
+              if (!previous && ::GetLastError() != ERROR_SUCCESS)
+              {
+                  DbgPrintf(L"NOP V5: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  g_mbOriginalOutlookWndProc = nullptr;
+                  return;
+              }
+
+              if (previous)
+              {
+                  g_mbOriginalOutlookWndProc = previous;
+              }
+
+              g_mbOutlookHost = search.window;
+              DbgPrintf(L"NOP V5: Outlook minimum height limited to %ld px", MB_MIN_OUTLOOK_HEIGHT);
+          }
+
+          // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
+          '@
+
+          if (-not $content.Contains($nativeNeedle)) {
+            throw "Could not locate DbgPrintf insertion point."
+          }
+          $content = $content.Replace($nativeNeedle, $nativeReplacement)
+
+          # Install the native window hook once the WebView controller exists.
+          # At this stage Outlook Host should already be created.
+          $controllerNeedle = '        winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));'
+          $controllerReplacement = @'
+                  winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
+                  MBInstallOutlookMinHeightHook();
+          '@
+
+          if (-not $content.Contains($controllerNeedle)) {
+            throw "Could not locate WebView controller initialization point."
+          }
+          $content = $content.Replace($controllerNeedle, $controllerReplacement)
+
+          # Keep only the selector that was proven manually in this Outlook build.
+          $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
+          $replacement = @'
           const cssClass = \"\
           [data-message-ad-id] { display: none !important; }\";\n\
           styleElement.appendChild
           '@
-          if (-not [regex]::IsMatch($content, $cssPattern)) {
+          if (-not [regex]::IsMatch($content, $pattern)) {
             throw "Could not locate CSS injection block."
           }
-          $content = [regex]::Replace($content, $cssPattern, $cssReplacement, 1)
+          $content = [regex]::Replace($content, $pattern, $replacement, 1)
 
-          # Do not intercept F12.
+          # Disable the patcher's F12 interception.
           $content = $content.Replace(
             'const wchar_t* isF12Enabled = L"y_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";',
             'const wchar_t* isF12Enabled = L"n_1A36CD25-E20F-4D0D-B1E6-3CC4307E1488";'
           )
 
-          # V4: inject the wide-layout compatibility shim BEFORE Outlook/React starts.
-          $needle = @'
-                  winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
-
-                  EventRegistrationToken tkn_NavigationCompleted;
-          '@
-
-          $insert = @'
-                  winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
-
-                  // V4 - keep Outlook's folder pane in wide-layout mode.
-                  // This runs at document creation time, before Outlook/React initializes.
-                  const wchar_t* wideLayoutScript = LR"MBJS(
-          (() => {
-            if (window.__MB_WIDE_LAYOUT_V4__) return;
-            Object.defineProperty(window, '__MB_WIDE_LAYOUT_V4__', {
-              value: true,
-              configurable: false,
-              enumerable: false,
-              writable: false
-            });
-
-            const MIN_WIDE_WIDTH = 1200;
-
-            // Outlook can use JS media queries for responsive layout.
-            // Make width-only media queries behave as if the viewport remains wide.
-            try {
-              const nativeMatchMedia = window.matchMedia.bind(window);
-              window.matchMedia = function(query) {
-                let q = String(query);
-
-                q = q.replace(
-                  /\(\s*max-width\s*:\s*[\d.]+px\s*\)/gi,
-                  '(max-width: 0px)'
-                );
-
-                q = q.replace(
-                  /\(\s*min-width\s*:\s*[\d.]+px\s*\)/gi,
-                  '(min-width: 0px)'
-                );
-
-                return nativeMatchMedia(q);
-              };
-            } catch (_) {}
-
-            // Outlook also uses ResizeObserver in parts of its responsive layout.
-            // Clamp only top-level app/navigation measurements, not every control.
-            try {
-              const NativeResizeObserver = window.ResizeObserver;
-
-              if (NativeResizeObserver) {
-                const shouldClamp = (target) => {
-                  try {
-                    if (!target || target.nodeType !== 1) return false;
-
-                    if (target.id === 'MainModule') return true;
-                    if (target.getAttribute?.('data-app-section') === 'NavigationPane') return true;
-
-                    return !!target.querySelector?.(
-                      '#MainModule, [data-app-section="NavigationPane"]'
-                    );
-                  } catch (_) {
-                    return false;
-                  }
-                };
-
-                const patchSizes = (sizes) => {
-                  if (!sizes) return sizes;
-                  try {
-                    return Array.from(sizes, s => ({
-                      inlineSize: Math.max(Number(s.inlineSize) || 0, MIN_WIDE_WIDTH),
-                      blockSize: Number(s.blockSize) || 0
-                    }));
-                  } catch (_) {
-                    return sizes;
-                  }
-                };
-
-                window.ResizeObserver = class MBResizeObserver {
-                  constructor(callback) {
-                    this._inner = new NativeResizeObserver((entries, observer) => {
-                      const patched = entries.map(entry => {
-                        if (!shouldClamp(entry.target)) return entry;
-
-                        const r = entry.contentRect;
-                        const width = Math.max(Number(r.width) || 0, MIN_WIDE_WIDTH);
-
-                        const patchedRect = {
-                          x: r.x,
-                          y: r.y,
-                          top: r.top,
-                          right: r.left + width,
-                          bottom: r.bottom,
-                          left: r.left,
-                          width,
-                          height: r.height,
-                          toJSON: () => ({
-                            x: r.x,
-                            y: r.y,
-                            top: r.top,
-                            right: r.left + width,
-                            bottom: r.bottom,
-                            left: r.left,
-                            width,
-                            height: r.height
-                          })
-                        };
-
-                        return new Proxy(entry, {
-                          get(target, prop) {
-                            if (prop === 'contentRect') return patchedRect;
-                            if (prop === 'contentBoxSize') return patchSizes(target.contentBoxSize);
-                            if (prop === 'borderBoxSize') return patchSizes(target.borderBoxSize);
-                            if (prop === 'devicePixelContentBoxSize') {
-                              return patchSizes(target.devicePixelContentBoxSize);
-                            }
-                            return Reflect.get(target, prop, target);
-                          }
-                        });
-                      });
-
-                      callback.call(this, patched, this);
-                    });
-                  }
-
-                  observe(target, options) {
-                    return this._inner.observe(target, options);
-                  }
-
-                  unobserve(target) {
-                    return this._inner.unobserve(target);
-                  }
-
-                  disconnect() {
-                    return this._inner.disconnect();
-                  }
-                };
-              }
-            } catch (_) {}
-          })();
-          )MBJS";
-
-                  HRESULT wideScriptHr = webview->AddScriptToExecuteOnDocumentCreated(
-                      wideLayoutScript,
-                      Microsoft::WRL::Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                          [](HRESULT errorCode, LPCWSTR id) -> HRESULT {
-                              if (SUCCEEDED(errorCode)) {
-                                  DbgPrintf(L"NOP V4: wide-layout startup script registered");
-                              } else {
-                                  DbgPrintf(L"NOP V4: wide-layout startup script failed 0x%08X", errorCode);
-                              }
-                              return S_OK;
-                          }
-                      ).Get()
-                  );
-
-                  if (FAILED(wideScriptHr)) {
-                      DbgPrintf(L"NOP V4: AddScriptToExecuteOnDocumentCreated failed 0x%08X", wideScriptHr);
-                  }
-
-                  EventRegistrationToken tkn_NavigationCompleted;
-          '@
-
-          if (-not $content.Contains($needle)) {
-            throw "Could not locate WebView2 controller initialization point."
-          }
-          $content = $content.Replace($needle, $insert)
-
-          # Keep the working V3 WebView2 hook trigger.
+          # Keep the proven V3 WebView2 hook timing fix.
           $hookPattern = '(?s)HMODULE WINAPI HookLoadLibraryExW\(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags\)\s*\{.*?\}\s*$'
           $hookReplacement = @'
           HMODULE WINAPI HookLoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags)
@@ -264,7 +255,7 @@ jobs:
           '@
 
           if (-not [regex]::IsMatch($content, $hookPattern)) {
-            throw "Could not locate HookLoadLibraryExW."
+            throw "Could not locate HookLoadLibraryExW in dllmain.cpp"
           }
           $content = [regex]::Replace($content, $hookPattern, $hookReplacement, 1)
 
@@ -274,10 +265,10 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V4 markers:"
-          Select-String -Path $path -Pattern "__MB_WIDE_LAYOUT_V4__"
-          Select-String -Path $path -Pattern "AddScriptToExecuteOnDocumentCreated"
+          Write-Host "V5 markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
+          Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_HEIGHT"
+          Select-String -Path $path -Pattern "Outlook minimum height limited"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -289,14 +280,12 @@ jobs:
         run: |
           $outDir = Join-Path $env:GITHUB_WORKSPACE "out"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-
           & msbuild "NOP\worker\worker.vcxproj" /m /p:Configuration=Release /p:Platform=x64 "/p:OutDir=$outDir\"
-
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V4 package
+      - name: Prepare V5 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -312,7 +301,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V4 - UPDATE
+          title Outlook Ad Hider V5 - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -331,7 +320,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V3 DLL with V4...
+          echo Replacing V3 DLL with V5...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -357,44 +346,50 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V4 DLL INSTALLED SUCCESSFULLY
+          echo   V5 DLL INSTALLED SUCCESSFULLY
           echo ============================================
+          echo.
+          echo V5 keeps the V3 ad fix and lowers only the
+          echo Outlook Host minimum tracking height to 500 px.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
           echo.
-          echo Test resizing the Outlook window.
+          echo Try resizing Outlook vertically with the mouse.
           echo.
           pause
           '@
 
           $readme = @'
-          Outlook Ad Hider V4
+          Outlook Ad Hider V5
           --------------------
-          Keeps the working V3 ad rule:
+          Base: working V3 behavior.
+
+          Keeps the proven ad rule:
           [data-message-ad-id] { display: none !important; }
 
-          Adds an experimental startup-time wide-layout patch BEFORE Outlook/React loads.
-          It adjusts width-based matchMedia queries and selected ResizeObserver measurements
-          so Outlook is less likely to unmount the folder pane when the window gets narrower.
+          Adds one native window change:
+          - Hooks the top-level window class "Outlook Host".
+          - On WM_GETMINMAXINFO, lets Outlook calculate its normal limits first.
+          - If Outlook asks for a minimum tracking height above 500 px, V5 lowers
+            only that height to 500 px.
+          - Width is NOT modified.
 
-          Diagnostic:
-          Open DevTools Console and run:
-          window.__MB_WIDE_LAYOUT_V4__
-          It should return true.
+          This build does NOT contain the experimental V4 matchMedia/ResizeObserver
+          layout patch and does not inject any folder-pane JavaScript.
 
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
 
-          If V4 causes unwanted layout behavior, reinstall the saved V3 package.
+          If Outlook behaves incorrectly, reinstall the saved V3 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V4.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V5.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V4 package
+      - name: Upload V5 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V4
+          name: Outlook-Ad-Hider-V5
           path: package
           if-no-files-found: error
