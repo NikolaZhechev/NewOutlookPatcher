@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V9
+name: Build Outlook Ad Hider V8
 
 on:
   workflow_dispatch:
@@ -17,14 +17,20 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V9
+      - name: Patch worker for Outlook V8
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V9 keeps the proven V5 native height fix: only lower Outlook Host's
-          # WM_GETMINMAXINFO minimum TRACKING height to 500 px. Width is untouched.
+          # V8 native WebView bounds fix:
+          # - keep the proven V5 500 px minimum-height change;
+          # - do NOT force a minimum native window width;
+          # - do NOT use ZoomFactor; V7 proved that does not control this Outlook layout;
+          # - instead keep the real WebView2 renderer at least 960 px wide and let its
+          #   parent HWND clip the right edge when the Outlook window is narrower.
+          # This keeps Outlook's responsive code in the genuine docked FolderPaneContainer
+          # layout while the visible native Outlook window can still be made narrower.
           $nativeNeedle = @'
               OutputDebugStringW(L"\r\n");
           }
@@ -36,11 +42,138 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V9 - allow the top-level Outlook Host window to be resized
-          // vertically below Outlook's normal minimum. Width is intentionally untouched.
+          // MUSICBANTER V8 - keep the real WebView renderer wide and clip it inside
+          // the narrower Outlook host. This avoids Outlook's responsive unmount of
+          // FolderPaneContainer/YYA9V without using an overlay or blocking React DOM.
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
+          static const LONG MB_MIN_WEBVIEW_LAYOUT_WIDTH = 960;
+
           static HWND g_mbOutlookHost = nullptr;
           static WNDPROC g_mbOriginalOutlookWndProc = nullptr;
+
+          static HWND g_mbWebViewParent = nullptr;
+          static WNDPROC g_mbOriginalWebViewParentWndProc = nullptr;
+          static ICoreWebView2Controller* g_mbWebViewController = nullptr;
+          static volatile LONG g_mbApplyingBounds = 0;
+
+          void MBApplyWideWebViewBounds()
+          {
+              if (!g_mbWebViewController || !g_mbWebViewParent)
+              {
+                  return;
+              }
+
+              if (::InterlockedCompareExchange(&g_mbApplyingBounds, 1, 0) != 0)
+              {
+                  return;
+              }
+
+              RECT bounds = {};
+              HRESULT hr = g_mbWebViewController->get_Bounds(&bounds);
+              if (FAILED(hr))
+              {
+                  ::InterlockedExchange(&g_mbApplyingBounds, 0);
+                  return;
+              }
+
+              LONG width = bounds.right - bounds.left;
+              if (width > 0 && width < MB_MIN_WEBVIEW_LAYOUT_WIDTH)
+              {
+                  bounds.right = bounds.left + MB_MIN_WEBVIEW_LAYOUT_WIDTH;
+                  hr = g_mbWebViewController->put_Bounds(bounds);
+                  if (FAILED(hr))
+                  {
+                      DbgPrintf(L"NOP V8: put_Bounds failed 0x%08X", hr);
+                  }
+              }
+
+              ::InterlockedExchange(&g_mbApplyingBounds, 0);
+          }
+
+          LRESULT CALLBACK MBWebViewParentWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+          {
+              WNDPROC original = g_mbOriginalWebViewParentWndProc;
+              if (!original)
+              {
+                  return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
+              }
+
+              LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+
+              if (uMsg == WM_SIZE || uMsg == WM_WINDOWPOSCHANGED)
+              {
+                  MBApplyWideWebViewBounds();
+              }
+
+              return result;
+          }
+
+          void MBRememberOutlookWebViewController(ICoreWebView2Controller* controller)
+          {
+              if (!controller || g_mbWebViewController)
+              {
+                  return;
+              }
+
+              HWND parentWindow = nullptr;
+              if (FAILED(controller->get_ParentWindow(&parentWindow)) || !parentWindow)
+              {
+                  return;
+              }
+
+              // Confirm that this controller belongs to the Outlook top-level window.
+              HWND root = ::GetAncestor(parentWindow, GA_ROOT);
+              if (!root)
+              {
+                  root = parentWindow;
+              }
+
+              WCHAR className[128] = {};
+              if (::GetClassNameW(root, className, ARRAYSIZE(className)) <= 0 ||
+                  ::lstrcmpW(className, L"Outlook Host") != 0)
+              {
+                  return;
+              }
+
+              controller->AddRef();
+              g_mbWebViewController = controller;
+              g_mbWebViewParent = parentWindow;
+
+              // V7 changed ZoomFactor. V8 intentionally restores the normal 100% zoom.
+              controller->put_ZoomFactor(1.0);
+
+              ::SetLastError(0);
+              auto original = reinterpret_cast<WNDPROC>(
+                  ::GetWindowLongPtrW(parentWindow, GWLP_WNDPROC)
+              );
+
+              if (original || ::GetLastError() == ERROR_SUCCESS)
+              {
+                  g_mbOriginalWebViewParentWndProc = original;
+
+                  ::SetLastError(0);
+                  auto previous = reinterpret_cast<WNDPROC>(
+                      ::SetWindowLongPtrW(
+                          parentWindow,
+                          GWLP_WNDPROC,
+                          reinterpret_cast<LONG_PTR>(MBWebViewParentWndProc)
+                      )
+                  );
+
+                  if (!previous && ::GetLastError() != ERROR_SUCCESS)
+                  {
+                      DbgPrintf(L"NOP V8: WebView parent subclass failed 0x%08X", ::GetLastError());
+                      g_mbOriginalWebViewParentWndProc = nullptr;
+                  }
+                  else if (previous)
+                  {
+                      g_mbOriginalWebViewParentWndProc = previous;
+                  }
+              }
+
+              DbgPrintf(L"NOP V8: main Outlook WebView2 controller captured");
+              MBApplyWideWebViewBounds();
+          }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
           {
@@ -53,7 +186,6 @@ jobs:
 
               if (uMsg == WM_GETMINMAXINFO)
               {
-                  // Let Outlook calculate its normal limits first.
                   LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
 
                   auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
@@ -65,7 +197,14 @@ jobs:
                   return result;
               }
 
-              return ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+              LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+
+              if (uMsg == WM_SIZE || uMsg == WM_WINDOWPOSCHANGED)
+              {
+                  MBApplyWideWebViewBounds();
+              }
+
+              return result;
           }
 
           struct MBOutlookWindowSearch
@@ -108,6 +247,7 @@ jobs:
           {
               if (g_mbOutlookHost != nullptr && g_mbOriginalOutlookWndProc != nullptr)
               {
+                  MBApplyWideWebViewBounds();
                   return;
               }
 
@@ -116,7 +256,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V9: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V8: Outlook Host window not found yet");
                   return;
               }
 
@@ -127,12 +267,10 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V9: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
-              // Publish the original proc before installing ours so the hook is safe
-              // even if a window message arrives immediately after SetWindowLongPtrW.
               g_mbOriginalOutlookWndProc = original;
 
               ::SetLastError(0);
@@ -146,7 +284,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V9: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -157,7 +295,8 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V9: Outlook minimum height limited to %ld px", MB_MIN_OUTLOOK_HEIGHT);
+              DbgPrintf(L"NOP V8: 500 px min height + clipped wide WebView enabled");
+              MBApplyWideWebViewBounds();
           }
 
           // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
@@ -173,112 +312,9 @@ jobs:
           $controllerNeedle = '        winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));'
           $controllerReplacement = @'
                   winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
+                  MBRememberOutlookWebViewController(createdController);
                   MBInstallOutlookMinHeightHook();
-
-                  // V9 - targeted Outlook responsive-layout patch.
-                  // The Outlook bundle contains one helper that returns compact mode at
-                  // <=918 px (or <=541 in a secondary layout, <=999 in portrait).
-                  // MailLeftPane uses that helper to replace the real docked
-                  // FolderPaneContainer with MailLeftPaneAsOverlay.
-                  // Intercept only that webpack module before it executes and make the
-                  // helper return false. No DOM removeChild blocking and no flyout click.
-                  const wchar_t* mbDockedFolderScript = LR"MBJS(
-          (() => {
-            if (globalThis.__MB_DOCKED_FOLDER_V9__) return;
-            globalThis.__MB_DOCKED_FOLDER_V9__ = true;
-
-            try {
-              const nativePush = Array.prototype.push;
-              const arr = globalThis.webpackChunkOwa || [];
-              let runtimePush = null;
-              let patched = false;
-
-              const patchChunk = (chunk) => {
-                try {
-                  const mods = chunk && chunk[1];
-                  if (!mods || patched) return;
-
-                  for (const id of Object.keys(mods)) {
-                    const fn = mods[id];
-                    if (typeof fn !== 'function') continue;
-
-                    const src = Function.prototype.toString.call(fn);
-
-                    // Exact responsive helper seen in Outlook:
-                    // portrait <=999, secondary layout <=541, normal <=918.
-                    if (
-                      src.includes('startsWith("portrait")') &&
-                      src.includes('<=999') &&
-                      src.includes('<=541') &&
-                      src.includes('<=918')
-                    ) {
-                      const match = src.match(/\.d\([^,]+,\{([\w$]+):\(\)=>/);
-                      const exportName = match && match[1];
-                      if (!exportName) continue;
-
-                      mods[id] = function(module, exports, require) {
-                        const neverCompactFolderPane = function() { return false; };
-                        const spec = {};
-                        spec[exportName] = () => neverCompactFolderPane;
-                        require.d(exports, spec);
-                      };
-
-                      patched = true;
-                      globalThis.__MB_DOCKED_FOLDER_V9_PATCHED__ = {
-                        moduleId: String(id),
-                        exportName: String(exportName)
-                      };
-                      break;
-                    }
-                  }
-                } catch (e) {
-                  globalThis.__MB_DOCKED_FOLDER_V9_ERROR__ = String(e);
-                }
-              };
-
-              const wrapper = function(...args) {
-                for (const item of args) patchChunk(item);
-                if (runtimePush) return runtimePush.apply(arr, args);
-                return nativePush.apply(arr, args);
-              };
-
-              // Webpack reads the old push while installing its runtime callback.
-              // Before that assignment we deliberately expose the native push so the
-              // runtime captures a non-recursive parent callback. After assignment,
-              // every OWA chunk goes through our targeted patch first.
-              Object.defineProperty(arr, 'push', {
-                configurable: true,
-                enumerable: false,
-                get() { return runtimePush ? wrapper : nativePush; },
-                set(fn) {
-                  if (typeof fn === 'function') runtimePush = fn;
-                }
-              });
-
-              globalThis.webpackChunkOwa = arr;
-            } catch (e) {
-              globalThis.__MB_DOCKED_FOLDER_V9_ERROR__ = String(e);
-            }
-          })();
-          )MBJS";
-
-                  HRESULT mbDockedHr = webview->AddScriptToExecuteOnDocumentCreated(
-                      mbDockedFolderScript,
-                      Microsoft::WRL::Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                          [](HRESULT errorCode, LPCWSTR id) -> HRESULT {
-                              if (SUCCEEDED(errorCode)) {
-                                  DbgPrintf(L"NOP V9: targeted docked-folder startup patch registered");
-                              } else {
-                                  DbgPrintf(L"NOP V9: targeted docked-folder startup patch failed 0x%08X", errorCode);
-                              }
-                              return S_OK;
-                          }
-                      ).Get()
-                  );
-
-                  if (FAILED(mbDockedHr)) {
-                      DbgPrintf(L"NOP V9: AddScriptToExecuteOnDocumentCreated failed 0x%08X", mbDockedHr);
-                  }
+                  MBApplyWideWebViewBounds();
           '@
 
           if (-not $content.Contains($controllerNeedle)) {
@@ -290,24 +326,7 @@ jobs:
           $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
           $replacement = @'
           const cssClass = \"\
-          [data-message-ad-id] { display: none !important; }\n\
-          button[value='other'],\n\
-          button[value='other'] .fui-Tab__content,\n\
-          button[value='other'] .fui-Tab__content--reserved-space {\n\
-            overflow: visible !important;\n\
-            text-overflow: clip !important;\n\
-            white-space: nowrap !important;\n\
-          }\n\
-          button[value='other'] {\n\
-            min-width: 56px !important;\n\
-            width: auto !important;\n\
-            flex-shrink: 0 !important;\n\
-          }\n\
-          button[value='other'] .fui-Tab__content,\n\
-          button[value='other'] .fui-Tab__content--reserved-space {\n\
-            min-width: max-content !important;\n\
-            width: max-content !important;\n\
-          }\";\n\
+          [data-message-ad-id] { display: none !important; }\";\n\
           styleElement.appendChild
           '@
           if (-not [regex]::IsMatch($content, $pattern)) {
@@ -386,13 +405,12 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V9 markers:"
+          Write-Host "V8 markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
-          Select-String -Path $path -Pattern "__MB_DOCKED_FOLDER_V9__"
-          Select-String -Path $path -Pattern "AddScriptToExecuteOnDocumentCreated"
-          Select-String -Path $path -Pattern "button\[value='other'\]"
+          Select-String -Path $path -Pattern "MB_MIN_WEBVIEW_LAYOUT_WIDTH"
           Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_HEIGHT"
-          Select-String -Path $path -Pattern "Outlook minimum height limited"
+          Select-String -Path $path -Pattern "put_Bounds"
+          Select-String -Path $path -Pattern "clipped wide WebView enabled"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -409,7 +427,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V9 package
+      - name: Prepare V8 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -425,7 +443,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V9 - UPDATE
+          title Outlook Ad Hider V8 - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -444,7 +462,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing current DLL with V9...
+          echo Replacing V6 DLL with V8...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -470,54 +488,55 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V9 DLL INSTALLED SUCCESSFULLY
+          echo   V8 DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V9 keeps the ad fix and 500 px minimum height.
-          echo V9 also forces the REAL docked folder pane to stay
-          echo in desktop mode below Outlook's 918 px breakpoint,
-          echo and fixes the clipped Other tab text.
+          echo V8 keeps the V3 ad fix and the V5 500 px minimum height.
+          echo Horizontal resizing is free. V8 keeps the REAL WebView renderer
+          echo at least 960 px wide and clips its right edge inside a narrower
+          echo Outlook window, so the classic docked folder pane stays mounted.
+          echo No hamburger flyout and no UI zoom.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
           echo.
-          echo Resize Outlook horizontally and vertically with the mouse.
+          echo Try resizing Outlook horizontally and vertically with the mouse.
           echo.
           pause
           '@
 
           $readme = @'
-          Outlook Ad Hider V9
+          Outlook Ad Hider V8
           --------------------
-          Base: the proven V5 native-height behavior.
+          Base: proven V3 ad fix + working V5 500 px minimum-height fix.
 
-          V9 fixes four things:
-          1. Hides the New Outlook message-list advertising row.
-          2. Keeps the working 500 px minimum window height.
-          3. Keeps the REAL docked FolderPaneContainer instead of Outlook switching
-             to MailLeftPaneAsOverlay when its responsive helper crosses 918 px.
-          4. Forces the Bulgarian "Other" tab text to remain fully visible even
-             while that tab is unselected.
+          Keeps the proven ad rule:
+          [data-message-ad-id] { display: none !important; }
 
-          The folder-pane fix is targeted at the exact Outlook webpack helper whose
-          logic is portrait<=999 / secondary<=541 / normal<=918. V9 replaces only
-          that helper module before Outlook React starts, making compact-folder mode
-          return false. It does NOT block Node.removeChild and does NOT click the
-          hamburger/flyout menu.
+          Folder-pane fix:
+          - Does NOT block React removeChild.
+          - Does NOT use the hamburger flyout/overlay.
+          - Does NOT spoof matchMedia or ResizeObserver.
+          - Does NOT change WebView2 ZoomFactor; it restores normal 1.0 zoom.
+          - Removes V6's artificial 943 px native minimum width.
+          - Keeps the actual WebView2 renderer at least 960 px wide.
+          - If the native Outlook window becomes narrower, the WebView parent clips
+            the right edge, while Outlook itself still receives a wide renderer.
+          - This is intended to keep the genuine FolderPaneContainer/YYA9V mounted
+            instead of switching NavigationPane from Ni89i to a7Ps_.
 
-          Width is not constrained. Chrome and Chrome cache are not touched.
+          Existing IFEO/AppVerifier settings stay unchanged.
+          Chrome and Chrome cache are not touched.
 
-          Optional diagnostics in DevTools Console:
-          window.__MB_DOCKED_FOLDER_V9__
-          window.__MB_DOCKED_FOLDER_V9_PATCHED__
+          If Outlook behaves incorrectly, reinstall the saved V5/V6 or V3 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V9.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V9 package
+      - name: Upload V8 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V9
+          name: Outlook-Ad-Hider-V8
           path: package
           if-no-files-found: error
