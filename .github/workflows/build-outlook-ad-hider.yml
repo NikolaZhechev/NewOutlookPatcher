@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V8 FIXED
+name: Build Outlook Ad Hider V8.5 CSS ONLY
 
 on:
   workflow_dispatch:
@@ -67,8 +67,7 @@ jobs:
               }
 
               LONG clientWidthPx = clientRect.right - clientRect.left;
-              LONG clientHeightPx = clientRect.bottom - clientRect.top;
-              if (clientWidthPx <= 0 || clientHeightPx <= 0)
+              if (clientWidthPx <= 0)
               {
                   return;
               }
@@ -106,19 +105,6 @@ jobs:
               if (delta < 0.0)
               {
                   delta = -delta;
-              }
-
-              // IMPORTANT: update BOTH bounds and zoom, and do it in the correct order.
-              // WebView2 needs the new pixel bounds so hit-testing matches rendering.
-              // If we only change ZoomFactor without Bounds, the title-bar buttons
-              // (min/max/close) end up visually offset from their hit-test rectangles.
-              RECT webViewBounds = {};
-              webViewBounds.right = clientWidthPx;
-              webViewBounds.bottom = clientHeightPx;
-              HRESULT hrBounds = g_mbWebViewController->put_Bounds(webViewBounds);
-              if (FAILED(hrBounds))
-              {
-                  DbgPrintf(L"NOP V8 FIXED: put_Bounds failed 0x%08X", hrBounds);
               }
 
               if (g_mbLastZoom < 0.0 || delta >= 0.002)
@@ -164,9 +150,6 @@ jobs:
               controller->AddRef();
               g_mbWebViewController = controller;
               DbgPrintf(L"NOP V8 FIXED: main Outlook WebView2 controller captured");
-
-              // Force an initial bounds+zoom sync so the first paint is correct.
-              MBUpdateOutlookWideLayoutZoom(root);
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -191,43 +174,7 @@ jobs:
                   return result;
               }
 
-              // IMPORTANT: WM_DPICHANGED must NOT be forwarded to the original WndProc
-              // with its default result, because Outlook's own DPI handling will fight
-              // with our ZoomFactor override and produce double-scaled, misplaced UI
-              // (broken min/max/close buttons).
-              if (uMsg == WM_DPICHANGED)
-              {
-                  // lParam is a RECT* with the suggested new window rect for the new DPI.
-                  const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
-                  if (suggested != nullptr)
-                  {
-                      ::SetWindowPos(
-                          hWnd,
-                          nullptr,
-                          suggested->left,
-                          suggested->top,
-                          suggested->right - suggested->left,
-                          suggested->bottom - suggested->top,
-                          SWP_NOZORDER | SWP_NOACTIVATE
-                      );
-                  }
-
-                  // Reset cached zoom so the next update forces a fresh put_ZoomFactor.
-                  g_mbLastZoom = -1.0;
-                  MBUpdateOutlookWideLayoutZoom(hWnd);
-                  return 0;
-              }
-
-              if (uMsg == WM_SIZE)
-              {
-                  // Let the original proc handle layout first, then update our WebView.
-                  LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-                  MBUpdateOutlookWideLayoutZoom(hWnd);
-                  return result;
-              }
-
-              // Catch any DPI/size changes that don't come through WM_SIZE.
-              if (uMsg == WM_WINDOWPOSCHANGED)
+              if (uMsg == WM_SIZE || uMsg == WM_DPICHANGED)
               {
                   LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
                   MBUpdateOutlookWideLayoutZoom(hWnd);
@@ -361,7 +308,7 @@ jobs:
           $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
           $replacement = @'
           const cssClass = \"\
-          [data-message-ad-id] { display: none !important; } #owaBuyMicrosoft365Btn_container { display: none !important; } button[role='tab'][value='other'] { flex: 0 0 auto !important; flex-shrink: 0 !important; width: auto !important; min-width: max-content !important; max-width: none !important; overflow: visible !important; white-space: nowrap !important; } button[role='tab'][value='other'] .fui-Tab__content, button[role='tab'][value='other'] .fui-Tab__content--reserved-space { white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; max-width: none !important; } div:has(> button[role='tab'][value='other']) { flex: 0 0 auto !important; flex-shrink: 0 !important; min-width: max-content !important; overflow: visible !important; }\";\n\
+          [data-message-ad-id] { display: none !important; } #owaBuyMicrosoft365Btn_container { display: none !important; } button[role='tab'][value='other'] { flex: 0 0 auto !important; flex-shrink: 0 !important; width: auto !important; min-width: max-content !important; max-width: none !important; overflow: visible !important; white-space: nowrap !important; } button[role='tab'][value='other'] .fui-Tab__content, button[role='tab'][value='other'] .fui-Tab__content--reserved-space { white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; max-width: none !important; } div:has(> button[role='tab'][value='other']) { flex: 0 0 auto !important; flex-shrink: 0 !important; min-width: max-content !important; overflow: visible !important; } #windowIconsHost { position: fixed !important; top: 0 !important; right: 0 !important; left: auto !important; width: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 144px))) !important; height: env(titlebar-area-height, 48px) !important; min-width: 0 !important; max-width: none !important; } #windowIconsHost > span { flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; height: 100% !important; } #windowIconsHost > span > button { width: 100% !important; min-width: 0 !important; max-width: none !important; height: 100% !important; min-height: 0 !important; }\";\n\
           styleElement.appendChild
           '@
           if (-not [regex]::IsMatch($content, $pattern)) {
@@ -449,9 +396,11 @@ jobs:
           Select-String -Path $path -Pattern "MB_MIN_WIDE_LAYOUT_ZOOM"
           Select-String -Path $path -Pattern "GetDpiForWindow"
           Select-String -Path $path -Pattern "GetClientRect"
-          Select-String -Path $path -Pattern "put_Bounds"
           Select-String -Path $path -Pattern "put_ZoomFactor"
           Select-String -Path $path -Pattern "DPI-aware persistent folder-pane zoom enabled"
+          Select-String -Path $path -Pattern "windowIconsHost"
+          Select-String -Path $path -Pattern "titlebar-area-width"
+          Select-String -Path $path -Pattern "titlebar-area-height"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -468,7 +417,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V8 FIXED package
+      - name: Prepare V8.5 CSS ONLY package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -484,7 +433,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V8 FIXED - UPDATE
+          title Outlook Ad Hider V8.5 CSS ONLY - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -503,7 +452,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V7 DLL with V8 FIXED...
+          echo Replacing current DLL with V8.5 CSS ONLY...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -529,13 +478,12 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V8 FIXED DLL INSTALLED SUCCESSFULLY
+          echo   V8.5 CSS ONLY DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
           echo V8 FIXED keeps the proven ad fix and the 500 px minimum height.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
           echo Folder-pane zoom is now DPI-aware and uses the Outlook client width.
-          echo WebView2 bounds are re-synced on resize to keep title-bar buttons clickable.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -546,7 +494,7 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V8 FIXED
+          Outlook Ad Hider V8.5 CSS ONLY
           --------------------------
           Built from the proven V7 workflow.
 
@@ -569,12 +517,7 @@ jobs:
           - This fixes the 125%/150% DPI mismatch that made the old threshold engage late.
           - Reference logical width: 960 px.
           - Minimum WebView2 ZoomFactor: 0.45.
-          - Recalculates on WM_SIZE, WM_WINDOWPOSCHANGED and WM_DPICHANGED.
-          - WebView2 put_Bounds is called together with put_ZoomFactor so that
-            hit-testing stays aligned with rendering. This fixes broken/misplaced
-            min/max/close buttons when resizing the window by hand.
-          - WM_DPICHANGED is handled by this hook and no longer forwarded to the
-            original WndProc, preventing double DPI scaling of the WebView2 content.
+          - Recalculates on WM_SIZE and WM_DPICHANGED.
           - Does not try to resurrect the folder tree after Outlook has unmounted it;
             instead it keeps Outlook in its wide/docked responsive layout.
 
@@ -583,18 +526,26 @@ jobs:
           - This fixes the broken V8 build where raw newlines caused ExecuteScript
             to fail parsing, so none of the injected CSS was applied.
 
+          Title-bar button alignment:
+          - CSS-only; no new C++ hooks or JavaScript event handlers.
+          - Uses WebView2/Chromium titlebar-area-* environment variables.
+          - #windowIconsHost is sized to the actual Window Controls Overlay region.
+          - Its three existing Outlook buttons share that width equally.
+          - Fallback stays at the original 144 x 48 px layout if the env variables
+            are unavailable.
+
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
 
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8-FIXED.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.5-CSS-ONLY.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V8 FIXED package
+      - name: Upload V8.5 CSS ONLY package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V8-FIXED
+          name: Outlook-Ad-Hider-V8.5-CSS-ONLY
           path: package
           if-no-files-found: error
