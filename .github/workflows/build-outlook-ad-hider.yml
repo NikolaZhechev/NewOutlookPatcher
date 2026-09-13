@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V10 RASTER FIX
+name: Build Outlook Ad Hider V10.1 RASTER PARSER FIX
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V10 RASTER FIX
+      - name: Patch worker for Outlook V10.1 RASTER FIX
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
@@ -335,7 +335,6 @@ jobs:
 
           // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
           '@
-          '@
 
           if (-not $content.Contains($nativeNeedle)) {
             throw "Could not locate DbgPrintf insertion point."
@@ -476,7 +475,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V10 RASTER FIX package
+      - name: Prepare V10.1 RASTER FIX package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -597,12 +596,12 @@ jobs:
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V10-RASTER-FIX.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V10-1-RASTER-FIX.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V10 RASTER FIX package
+      - name: Upload V10.1 RASTER FIX package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V10-RASTER-FIX
+          name: Outlook-Ad-Hider-V10-1-RASTER-FIX
           path: package
           if-no-files-found: error
