@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V8 FIXED
+name: Build Outlook Ad Hider V8.4 INTEGRATED
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V8 FIXED
+      - name: Patch worker for Outlook V8.4 INTEGRATED
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V8 FIXED native/window WebView2 fix:
+          # V8.4 INTEGRATED native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
           # - keep native horizontal resizing unrestricted;
           # - below 960 logical client px, dynamically lower WebView2 host zoom so the page keeps
@@ -41,7 +41,7 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V8 FIXED - keep the classic docked folder pane by preserving Outlook's
+          // MUSICBANTER V8.4 INTEGRATED - keep the classic docked folder pane by preserving Outlook's
           // wide logical WebView layout while allowing the native window itself to narrow.
           static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
@@ -116,7 +116,7 @@ jobs:
                   }
                   else
                   {
-                      DbgPrintf(L"NOP V8 FIXED: put_ZoomFactor failed 0x%08X", hr);
+                      DbgPrintf(L"NOP V8.4 INTEGRATED: put_ZoomFactor failed 0x%08X", hr);
                   }
               }
           }
@@ -149,7 +149,7 @@ jobs:
 
               controller->AddRef();
               g_mbWebViewController = controller;
-              DbgPrintf(L"NOP V8 FIXED: main Outlook WebView2 controller captured");
+              DbgPrintf(L"NOP V8.4 INTEGRATED: main Outlook WebView2 controller captured");
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -233,7 +233,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V8 FIXED: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V8.4 INTEGRATED: Outlook Host window not found yet");
                   return;
               }
 
@@ -244,7 +244,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.4 INTEGRATED: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -261,7 +261,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.4 INTEGRATED: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -272,7 +272,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V8 FIXED: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
+              DbgPrintf(L"NOP V8.4 INTEGRATED: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
               MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
           }
 
@@ -315,6 +315,21 @@ jobs:
             throw "Could not locate CSS injection block."
           }
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
+
+          # V8.4 INTEGRATED title-button fix.
+          # Pure JavaScript only: no extra native hooks. A transparent overlay covers
+          # exactly #windowIconsHost, splits it into three equal hit zones, and invokes
+          # the intended Outlook DOM button programmatically.
+          $titleNeedle = 'document.head.appendChild(styleElement);\n\'
+          $titleReplacement = @'
+          document.head.appendChild(styleElement);\n\
+          try{if(!window.__mbWinButtonsV84){window.__mbWinButtonsV84=1;var o=document.createElement('div');o.id='musicbanterWindowButtonsOverlay';o.style.cssText='position:fixed;z-index:2147483647;background:transparent;pointer-events:auto;';document.body.appendChild(o);var s=function(){var h=document.getElementById('windowIconsHost');if(!h){o.style.display='none';return;}var r=h.getBoundingClientRect();o.style.display='block';o.style.left=r.left+'px';o.style.top=r.top+'px';o.style.width=r.width+'px';o.style.height=r.height+'px';};o.addEventListener('mousedown',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();},true);o.addEventListener('mouseup',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();},true);o.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();var r=o.getBoundingClientRect();var x=e.clientX-r.left;var t=null;if(x<r.width/3){t=document.getElementById('windowIconMinimize');}else if(x<r.width*2/3){t=document.getElementById('windowIconRestore')||document.getElementById('windowIconMaximize');}else{t=document.getElementById('windowIconClose');}if(t){o.style.pointerEvents='none';try{t.click();}finally{setTimeout(function(){o.style.pointerEvents='auto';s();},0);}}},true);s();window.addEventListener('resize',s,true);setInterval(s,500);}}catch(e){}\n\
+          '@
+
+          if (-not $content.Contains($titleNeedle)) {
+            throw "Could not locate document.head.appendChild(styleElement) for V8.4 title-button fix."
+          }
+          $content = $content.Replace($titleNeedle, $titleReplacement)
 
           # Disable the patcher's F12 interception.
           $content = $content.Replace(
@@ -387,7 +402,7 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V8 FIXED markers:"
+          Write-Host "V8.4 INTEGRATED markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
           Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
           Select-String -Path $path -Pattern "value='other'"
@@ -398,6 +413,9 @@ jobs:
           Select-String -Path $path -Pattern "GetClientRect"
           Select-String -Path $path -Pattern "put_ZoomFactor"
           Select-String -Path $path -Pattern "DPI-aware persistent folder-pane zoom enabled"
+          Select-String -Path $path -Pattern "__mbWinButtonsV84"
+          Select-String -Path $path -Pattern "musicbanterWindowButtonsOverlay"
+          Select-String -Path $path -Pattern "windowIconClose"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -414,7 +432,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V8 FIXED package
+      - name: Prepare V8.4 INTEGRATED package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -430,7 +448,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V8 FIXED - UPDATE
+          title Outlook Ad Hider V8.4 INTEGRATED - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -449,7 +467,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V7 DLL with V8 FIXED...
+          echo Replacing V8 FIXED DLL with V8.4 INTEGRATED...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -475,12 +493,13 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V8 FIXED DLL INSTALLED SUCCESSFULLY
+          echo   V8.4 INTEGRATED DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V8 FIXED keeps the proven ad fix and the 500 px minimum height.
+          echo V8.4 INTEGRATED keeps the proven ad fix and the 500 px minimum height.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
-          echo Folder-pane zoom is now DPI-aware and uses the Outlook client width.
+          echo Folder-pane zoom is DPI-aware and uses the Outlook client width.
+          echo V8.4 fixes the three title buttons inside the same DLL with a JS overlay.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -491,7 +510,7 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V8 FIXED
+          Outlook Ad Hider V8.4 INTEGRATED
           --------------------------
           Built from the proven V7 workflow.
 
@@ -523,18 +542,28 @@ jobs:
           - This fixes the broken V8 build where raw newlines caused ExecuteScript
             to fail parsing, so none of the injected CSS was applied.
 
+          V8.4 integrated window-button fix:
+          - No separate helper/script is required.
+          - No additional native WebView2 event handler or WM_NCHITTEST hook is added.
+          - A transparent DOM overlay is positioned exactly over #windowIconsHost.
+          - Its left, middle, and right thirds represent Minimize, Maximize/Restore,
+            and Close.
+          - The overlay suppresses the mis-mapped physical click and calls the intended
+            Outlook DOM button programmatically.
+          - The overlay is kept aligned on resize and DOM refresh.
+
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
 
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8-FIXED.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.4-INTEGRATED.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V8 FIXED package
+      - name: Upload V8.4 INTEGRATED package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V8-FIXED
+          name: Outlook-Ad-Hider-V8.4-INTEGRATED
           path: package
           if-no-files-found: error
