@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V8.1
+name: Build Outlook Ad Hider V8.2
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V8.1
+      - name: Patch worker for Outlook V8.2
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V8.1 native/window WebView2 fix:
+          # V8.2 native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
           # - keep native horizontal resizing unrestricted;
           # - below 960 logical client px, dynamically lower WebView2 host zoom so the page keeps
@@ -34,6 +34,64 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
+          void MBInstallWindowButtonMessageBridge(ICoreWebView2* webview)
+          {
+              if (!webview)
+              {
+                  return;
+              }
+
+              EventRegistrationToken token = {};
+              HRESULT hr = webview->add_WebMessageReceived(
+                  Microsoft::WRL::Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                      [](ICoreWebView2* sender, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT
+                      {
+                          LPWSTR message = nullptr;
+                          HRESULT readHr = args->TryGetWebMessageAsString(&message);
+                          if (FAILED(readHr) || !message)
+                          {
+                              return S_OK;
+                          }
+
+                          HWND host = g_mbOutlookHost;
+                          if (host && ::IsWindow(host))
+                          {
+                              if (::lstrcmpW(message, L"MBWIN:MINIMIZE") == 0)
+                              {
+                                  ::PostMessageW(host, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                              }
+                              else if (::lstrcmpW(message, L"MBWIN:TOGGLEMAX") == 0)
+                              {
+                                  ::PostMessageW(
+                                      host,
+                                      WM_SYSCOMMAND,
+                                      ::IsZoomed(host) ? SC_RESTORE : SC_MAXIMIZE,
+                                      0
+                                  );
+                              }
+                              else if (::lstrcmpW(message, L"MBWIN:CLOSE") == 0)
+                              {
+                                  ::PostMessageW(host, WM_SYSCOMMAND, SC_CLOSE, 0);
+                              }
+                          }
+
+                          ::CoTaskMemFree(message);
+                          return S_OK;
+                      }
+                  ).Get(),
+                  &token
+              );
+
+              if (FAILED(hr))
+              {
+                  DbgPrintf(L"NOP V8.2: add_WebMessageReceived failed 0x%08X", hr);
+              }
+              else
+              {
+                  DbgPrintf(L"NOP V8.2: DOM window-button message bridge installed");
+              }
+          }
+
           // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
           '@
 
@@ -41,7 +99,7 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V8.1 - keep the classic docked folder pane by preserving Outlook's
+          // MUSICBANTER V8.2 - keep the classic docked folder pane by preserving Outlook's
           // wide logical WebView layout while allowing the native window itself to narrow.
           static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
@@ -116,7 +174,7 @@ jobs:
                   }
                   else
                   {
-                      DbgPrintf(L"NOP V8.1: put_ZoomFactor failed 0x%08X", hr);
+                      DbgPrintf(L"NOP V8.2: put_ZoomFactor failed 0x%08X", hr);
                   }
               }
           }
@@ -149,88 +207,7 @@ jobs:
 
               controller->AddRef();
               g_mbWebViewController = controller;
-              DbgPrintf(L"NOP V8.1: main Outlook WebView2 controller captured");
-          }
-
-          bool MBGetCaptionButtonHitTest(HWND hWnd, LPARAM lParam, LRESULT* hitTest)
-          {
-              if (!hWnd || !hitTest)
-              {
-                  return false;
-              }
-
-              // At 100% zoom Outlook's own title-bar hit testing is correct.
-              // Only compensate while our adaptive WebView2 zoom is active.
-              if (g_mbLastZoom < 0.0 || g_mbLastZoom >= 0.999)
-              {
-                  return false;
-              }
-
-              RECT windowRect = {};
-              if (!::GetWindowRect(hWnd, &windowRect))
-              {
-                  return false;
-              }
-
-              UINT dpi = ::GetDpiForWindow(hWnd);
-              if (dpi == 0)
-              {
-                  dpi = 96;
-              }
-
-              LONG buttonWidth = ::GetSystemMetricsForDpi(SM_CXSIZE, dpi);
-              LONG captionButtonHeight = ::GetSystemMetricsForDpi(SM_CYSIZE, dpi);
-              LONG frameHeight = ::GetSystemMetricsForDpi(SM_CYFRAME, dpi);
-              LONG paddedBorder = ::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-
-              // WebView2 Window Controls Overlay uses a title-bar region around 48
-              // logical pixels high. Keep at least that much hit area after DPI scaling.
-              LONG overlayHeight = ::MulDiv(48, static_cast<int>(dpi), 96);
-              LONG hitHeight = captionButtonHeight + frameHeight + paddedBorder;
-              if (hitHeight < overlayHeight)
-              {
-                  hitHeight = overlayHeight;
-              }
-
-              if (buttonWidth <= 0 || hitHeight <= 0)
-              {
-                  return false;
-              }
-
-              LONG screenX = static_cast<LONG>(static_cast<short>(LOWORD(lParam)));
-              LONG screenY = static_cast<LONG>(static_cast<short>(HIWORD(lParam)));
-
-              // Preserve the very top resize border for non-maximized windows.
-              if (!::IsZoomed(hWnd) &&
-                  screenY < windowRect.top + frameHeight)
-              {
-                  return false;
-              }
-
-              if (screenY < windowRect.top ||
-                  screenY >= windowRect.top + hitHeight ||
-                  screenX < windowRect.right - (buttonWidth * 3) ||
-                  screenX >= windowRect.right)
-              {
-                  return false;
-              }
-
-              LONG fromRight = windowRect.right - screenX;
-
-              if (fromRight <= buttonWidth)
-              {
-                  *hitTest = HTCLOSE;
-              }
-              else if (fromRight <= buttonWidth * 2)
-              {
-                  *hitTest = HTMAXBUTTON;
-              }
-              else
-              {
-                  *hitTest = HTMINBUTTON;
-              }
-
-              return true;
+              DbgPrintf(L"NOP V8.2: main Outlook WebView2 controller captured");
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -240,15 +217,6 @@ jobs:
               if (!original)
               {
                   return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
-              }
-
-              if (uMsg == WM_NCHITTEST)
-              {
-                  LRESULT hitTest = HTNOWHERE;
-                  if (MBGetCaptionButtonHitTest(hWnd, lParam, &hitTest))
-                  {
-                      return hitTest;
-                  }
               }
 
               if (uMsg == WM_GETMINMAXINFO)
@@ -323,7 +291,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V8.1: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V8.2: Outlook Host window not found yet");
                   return;
               }
 
@@ -334,7 +302,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8.1: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.2: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -351,7 +319,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8.1: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.2: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -362,7 +330,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V8.1: 500 px min height + DPI-aware folder pane + caption-button hit-test fix enabled");
+              DbgPrintf(L"NOP V8.2: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
               MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
           }
 
@@ -381,6 +349,7 @@ jobs:
                   winrt::check_hresult(createdController->get_CoreWebView2(webview.put()));
                   MBRememberOutlookWebViewController(createdController);
                   MBInstallOutlookMinHeightHook();
+                  MBInstallWindowButtonMessageBridge(webview.get());
                   if (g_mbOutlookHost)
                   {
                       MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
@@ -405,6 +374,64 @@ jobs:
             throw "Could not locate CSS injection block."
           }
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
+
+          # V8.2 window controls fix.
+          # Outlook renders Minimize / Maximize-Restore / Close as three equal DOM buttons
+          # inside #windowIconsHost. When WebView2 ZoomFactor is below 1.0, Outlook's own
+          # button action mapping can become offset. Capture pointer input in that host,
+          # determine the intended button strictly from the pointer X coordinate, suppress
+          # Outlook's original handler, and send a string to the native WebMessage bridge.
+          $windowButtonNeedle = 'document.head.appendChild(styleElement);\n\'
+          $windowButtonReplacement = @'
+          document.head.appendChild(styleElement);\n\
+          if (!window.__musicbanterWindowButtonsV82) {\n\
+            window.__musicbanterWindowButtonsV82 = true;\n\
+            let mbWindowButtonDown = null;\n\
+            const mbWindowButtonHit = (ev) => {\n\
+              const host = document.getElementById('windowIconsHost');\n\
+              if (!host) return null;\n\
+              const r = host.getBoundingClientRect();\n\
+              if (r.width <= 0 || r.height <= 0) return null;\n\
+              if (ev.clientX < r.left || ev.clientX >= r.right || ev.clientY < r.top || ev.clientY >= r.bottom) return null;\n\
+              const x = ev.clientX - r.left;\n\
+              const third = r.width / 3;\n\
+              if (x < third) return 'MINIMIZE';\n\
+              if (x < third * 2) return 'TOGGLEMAX';\n\
+              return 'CLOSE';\n\
+            };\n\
+            const mbStopWindowButtonEvent = (ev) => {\n\
+              ev.preventDefault();\n\
+              ev.stopPropagation();\n\
+              ev.stopImmediatePropagation();\n\
+            };\n\
+            document.addEventListener('pointerdown', (ev) => {\n\
+              const action = mbWindowButtonHit(ev);\n\
+              if (!action) return;\n\
+              mbWindowButtonDown = action;\n\
+              mbStopWindowButtonEvent(ev);\n\
+            }, true);\n\
+            document.addEventListener('pointerup', (ev) => {\n\
+              const action = mbWindowButtonHit(ev);\n\
+              if (!action) { mbWindowButtonDown = null; return; }\n\
+              mbStopWindowButtonEvent(ev);\n\
+              if (mbWindowButtonDown === action && window.chrome && window.chrome.webview) {\n\
+                window.chrome.webview.postMessage('MBWIN:' + action);\n\
+              }\n\
+              mbWindowButtonDown = null;\n\
+            }, true);\n\
+            document.addEventListener('pointercancel', () => { mbWindowButtonDown = null; }, true);\n\
+            document.addEventListener('click', (ev) => {\n\
+              const action = mbWindowButtonHit(ev);\n\
+              if (!action) return;\n\
+              mbStopWindowButtonEvent(ev);\n\
+            }, true);\n\
+          }\n\
+          '@
+
+          if (-not $content.Contains($windowButtonNeedle)) {
+            throw "Could not locate document.head.appendChild(styleElement) for V8.2 window-button bridge."
+          }
+          $content = $content.Replace($windowButtonNeedle, $windowButtonReplacement)
 
           # Disable the patcher's F12 interception.
           $content = $content.Replace(
@@ -477,7 +504,7 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V8.1 markers:"
+          Write-Host "V8.2 markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
           Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
           Select-String -Path $path -Pattern "value='other'"
@@ -488,11 +515,13 @@ jobs:
           Select-String -Path $path -Pattern "GetClientRect"
           Select-String -Path $path -Pattern "put_ZoomFactor"
           Select-String -Path $path -Pattern "DPI-aware persistent folder-pane zoom enabled"
-          Select-String -Path $path -Pattern "MBGetCaptionButtonHitTest"
-          Select-String -Path $path -Pattern "WM_NCHITTEST"
-          Select-String -Path $path -Pattern "HTCLOSE"
-          Select-String -Path $path -Pattern "HTMAXBUTTON"
-          Select-String -Path $path -Pattern "HTMINBUTTON"
+          Select-String -Path $path -Pattern "MBInstallWindowButtonMessageBridge"
+          Select-String -Path $path -Pattern "add_WebMessageReceived"
+          Select-String -Path $path -Pattern "MBWIN:MINIMIZE"
+          Select-String -Path $path -Pattern "MBWIN:TOGGLEMAX"
+          Select-String -Path $path -Pattern "MBWIN:CLOSE"
+          Select-String -Path $path -Pattern "windowIconsHost"
+          Select-String -Path $path -Pattern "__musicbanterWindowButtonsV82"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -509,7 +538,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V8.1 package
+      - name: Prepare V8.2 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -525,7 +554,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V8.1 - UPDATE
+          title Outlook Ad Hider V8.2 - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -544,7 +573,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V8 FIXED DLL with V8.1...
+          echo Replacing V8 FIXED DLL with V8.2...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -570,13 +599,13 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V8.1 DLL INSTALLED SUCCESSFULLY
+          echo   V8.2 DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V8.1 keeps the proven ad fix and the 500 px minimum height.
+          echo V8.2 keeps the proven ad fix and the 500 px minimum height.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
           echo Folder-pane zoom is DPI-aware and uses the Outlook client width.
-          echo V8.1 also repairs Minimize/Maximize/Close hit testing below 100%% zoom.
+          echo V8.2 routes the three DOM title-bar buttons directly to Win32 commands.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -587,7 +616,7 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V8.1
+          Outlook Ad Hider V8.2
           --------------------------
           Built from the proven V7 workflow.
 
@@ -614,18 +643,23 @@ jobs:
           - Does not try to resurrect the folder tree after Outlook has unmounted it;
             instead it keeps Outlook in its wide/docked responsive layout.
 
-          Window buttons:
-          - At ZoomFactor 1.0 Outlook keeps its original behavior unchanged.
-          - Below 1.0, V8.1 supplies DPI-aware native WM_NCHITTEST zones for the
-            rightmost Minimize, Maximize/Restore, and Close buttons.
-          - This prevents the visual X from acting like Maximize when the WebView
-            content is zoomed to preserve the folder pane.
-          - The top resize border remains available on non-maximized windows.
-
           JavaScript/CSS injection:
           - CSS is kept on one generated JavaScript string line.
           - This fixes the broken V8 build where raw newlines caused ExecuteScript
             to fail parsing, so none of the injected CSS was applied.
+
+          Window buttons:
+          - Outlook exposes the title controls as DOM elements inside #windowIconsHost.
+          - The host contains three equal 48 px buttons at the tested size:
+            Minimize, Maximize/Restore, Close.
+          - V8.2 does not trust Outlook's zoomed button-action mapping.
+          - Pointer input inside #windowIconsHost is divided into three equal horizontal
+            zones using getBoundingClientRect() and event.clientX.
+          - Left zone sends SC_MINIMIZE.
+          - Middle zone sends SC_MAXIMIZE or SC_RESTORE depending on current state.
+          - Right zone sends SC_CLOSE.
+          - The original Outlook pointer/click handler is suppressed only inside this
+            three-button host, so the rest of the title bar is unchanged.
 
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
@@ -633,12 +667,12 @@ jobs:
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.1.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.2.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V8.1 package
+      - name: Upload V8.2 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V8.1
+          name: Outlook-Ad-Hider-V8.2
           path: package
           if-no-files-found: error
