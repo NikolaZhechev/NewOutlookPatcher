@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V8 FIXED
+name: Build Outlook Ad Hider V9 CAPTION FIX
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V8 FIXED
+      - name: Patch worker for Outlook V9 CAPTION FIX
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V8 FIXED native/window WebView2 fix:
+          # V9 CAPTION FIX native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
           # - keep native horizontal resizing unrestricted;
           # - below 960 logical client px, dynamically lower WebView2 host zoom so the page keeps
@@ -41,7 +41,7 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V8 FIXED - keep the classic docked folder pane by preserving Outlook's
+          // MUSICBANTER V9 CAPTION FIX - keep the classic docked folder pane by preserving Outlook's
           // wide logical WebView layout while allowing the native window itself to narrow.
           static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
@@ -67,8 +67,7 @@ jobs:
               }
 
               LONG clientWidthPx = clientRect.right - clientRect.left;
-              LONG clientHeightPx = clientRect.bottom - clientRect.top;
-              if (clientWidthPx <= 0 || clientHeightPx <= 0)
+              if (clientWidthPx <= 0)
               {
                   return;
               }
@@ -106,19 +105,6 @@ jobs:
               if (delta < 0.0)
               {
                   delta = -delta;
-              }
-
-              // IMPORTANT: update BOTH bounds and zoom, and do it in the correct order.
-              // WebView2 needs the new pixel bounds so hit-testing matches rendering.
-              // If we only change ZoomFactor without Bounds, the title-bar buttons
-              // (min/max/close) end up visually offset from their hit-test rectangles.
-              RECT webViewBounds = {};
-              webViewBounds.right = clientWidthPx;
-              webViewBounds.bottom = clientHeightPx;
-              HRESULT hrBounds = g_mbWebViewController->put_Bounds(webViewBounds);
-              if (FAILED(hrBounds))
-              {
-                  DbgPrintf(L"NOP V8 FIXED: put_Bounds failed 0x%08X", hrBounds);
               }
 
               if (g_mbLastZoom < 0.0 || delta >= 0.002)
@@ -164,9 +150,6 @@ jobs:
               controller->AddRef();
               g_mbWebViewController = controller;
               DbgPrintf(L"NOP V8 FIXED: main Outlook WebView2 controller captured");
-
-              // Force an initial bounds+zoom sync so the first paint is correct.
-              MBUpdateOutlookWideLayoutZoom(root);
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -176,6 +159,70 @@ jobs:
               if (!original)
               {
                   return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
+              }
+
+              // MUSICBANTER V9 CAPTION FIX:
+              // WebView2 ZoomFactor keeps Outlook in the wide/docked responsive layout, but
+              // New Outlook also places its custom title bar over the WebView. At zoom < 1.0
+              // the WebView can claim the top-right area as client/drag content and the native
+              // caption buttons then stop behaving like real Minimize/Maximize/Close buttons.
+              // Force the standard Windows non-client hit-test for only the three caption
+              // rectangles. This leaves the rest of Outlook/WebView hit-testing untouched.
+              if (uMsg == WM_NCHITTEST)
+              {
+                  LRESULT originalHit = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
+
+                  if (originalHit == HTCLOSE ||
+                      originalHit == HTMAXBUTTON ||
+                      originalHit == HTMINBUTTON)
+                  {
+                      return originalHit;
+                  }
+
+                  RECT windowRect = {};
+                  if (::GetWindowRect(hWnd, &windowRect))
+                  {
+                      POINT screenPoint = {
+                          static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
+                          static_cast<LONG>(static_cast<short>(HIWORD(lParam)))
+                      };
+
+                      const LONG windowWidth = windowRect.right - windowRect.left;
+                      const LONG localX = screenPoint.x - windowRect.left;
+                      const LONG localY = screenPoint.y - windowRect.top;
+
+                      UINT dpi = ::GetDpiForWindow(hWnd);
+                      if (dpi == 0)
+                      {
+                          dpi = 96;
+                      }
+
+                      // Windows 11 caption hit regions are approximately 46 x 34 DIPs.
+                      // Scale them with the actual monitor DPI so the fix also works at
+                      // 125%, 150%, etc. The rectangles are intentionally limited to the
+                      // far-right top strip so Outlook's own title-bar controls stay native.
+                      const LONG captionButtonWidth = ::MulDiv(46, static_cast<int>(dpi), 96);
+                      const LONG captionButtonHeight = ::MulDiv(34, static_cast<int>(dpi), 96);
+                      const LONG captionStripLeft = windowWidth - (captionButtonWidth * 3);
+
+                      if (localY >= 0 && localY < captionButtonHeight &&
+                          localX >= captionStripLeft && localX < windowWidth)
+                      {
+                          if (localX >= windowWidth - captionButtonWidth)
+                          {
+                              return HTCLOSE;
+                          }
+
+                          if (localX >= windowWidth - (captionButtonWidth * 2))
+                          {
+                              return HTMAXBUTTON;
+                          }
+
+                          return HTMINBUTTON;
+                      }
+                  }
+
+                  return originalHit;
               }
 
               if (uMsg == WM_GETMINMAXINFO)
@@ -191,89 +238,7 @@ jobs:
                   return result;
               }
 
-              // WORKAROUND: Fix broken title-bar button hit-testing when the window
-              // is custom-sized. Outlook's modern title bar relies on correct NC
-              // hit-testing; if our subclass swallows or mis-forwards WM_NCHITTEST,
-              // the min/max/close buttons render but do not respond to clicks.
-              if (uMsg == WM_NCHITTEST)
-              {
-                  LRESULT hit = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-
-                  // If the original proc returns HTNOWHERE (or 0) for a point that
-                  // is visually inside the title bar, force HTCAPTION so the
-                  // buttons still receive their click messages.
-                  if (hit == HTNOWHERE)
-                  {
-                      POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-                      ::ScreenToClient(hWnd, &pt);
-
-                      RECT clientRect = {};
-                      ::GetClientRect(hWnd, &clientRect);
-
-                      // Title bar is the top ~48 px (scaled by DPI) of the window.
-                      UINT dpi = ::GetDpiForWindow(hWnd);
-                      if (dpi == 0) dpi = 96;
-                      LONG titleBarHeightPx = ::MulDiv(48, dpi, 96);
-
-                      if (pt.y >= 0 && pt.y < titleBarHeightPx &&
-                          pt.x >= 0 && pt.x < clientRect.right)
-                      {
-                          return HTCAPTION;
-                      }
-                  }
-
-                  return hit;
-              }
-
-              if (uMsg == WM_NCLBUTTONDOWN)
-              {
-                  LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-                  return result;
-              }
-
-              if (uMsg == WM_NCLBUTTONUP)
-              {
-                  LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-                  return result;
-              }
-
-              // IMPORTANT: WM_DPICHANGED must NOT be forwarded to the original WndProc
-              // with its default result, because Outlook's own DPI handling will fight
-              // with our ZoomFactor override and produce double-scaled, misplaced UI
-              // (broken min/max/close buttons).
-              if (uMsg == WM_DPICHANGED)
-              {
-                  // lParam is a RECT* with the suggested new window rect for the new DPI.
-                  const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
-                  if (suggested != nullptr)
-                  {
-                      ::SetWindowPos(
-                          hWnd,
-                          nullptr,
-                          suggested->left,
-                          suggested->top,
-                          suggested->right - suggested->left,
-                          suggested->bottom - suggested->top,
-                          SWP_NOZORDER | SWP_NOACTIVATE
-                      );
-                  }
-
-                  // Reset cached zoom so the next update forces a fresh put_ZoomFactor.
-                  g_mbLastZoom = -1.0;
-                  MBUpdateOutlookWideLayoutZoom(hWnd);
-                  return 0;
-              }
-
-              if (uMsg == WM_SIZE)
-              {
-                  // Let the original proc handle layout first, then update our WebView.
-                  LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-                  MBUpdateOutlookWideLayoutZoom(hWnd);
-                  return result;
-              }
-
-              // Catch any DPI/size changes that don't come through WM_SIZE.
-              if (uMsg == WM_WINDOWPOSCHANGED)
+              if (uMsg == WM_SIZE || uMsg == WM_DPICHANGED)
               {
                   LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
                   MBUpdateOutlookWideLayoutZoom(hWnd);
@@ -371,7 +336,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V8 FIXED: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
+              DbgPrintf(L"NOP V9 CAPTION FIX: 500 px min height + DPI-aware folder-pane zoom + native caption hit-test enabled");
               MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
           }
 
@@ -382,11 +347,6 @@ jobs:
             throw "Could not locate DbgPrintf insertion point."
           }
           $content = $content.Replace($nativeNeedle, $nativeReplacement)
-
-          # Make sure GET_X_LPARAM / GET_Y_LPARAM are available.
-          if (-not $content.Contains("#include <windowsx.h>")) {
-            $content = "#include <windowsx.h>`r`n" + $content
-          }
 
           # Install the native window hook once the WebView controller exists.
           # At this stage Outlook Host should already be created.
@@ -406,7 +366,7 @@ jobs:
           }
           $content = $content.Replace($controllerNeedle, $controllerReplacement)
 
-          # V8 FIXED UI CSS.
+          # V9 CAPTION FIX UI CSS.
           # IMPORTANT: the cssClass string is intentionally kept on one JavaScript line.
           # Raw newlines inside this quoted JS string would make ExecuteScript fail to parse.
           $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
@@ -491,7 +451,7 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V8 FIXED markers:"
+          Write-Host "V9 CAPTION FIX markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
           Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
           Select-String -Path $path -Pattern "value='other'"
@@ -500,12 +460,10 @@ jobs:
           Select-String -Path $path -Pattern "MB_MIN_WIDE_LAYOUT_ZOOM"
           Select-String -Path $path -Pattern "GetDpiForWindow"
           Select-String -Path $path -Pattern "GetClientRect"
-          Select-String -Path $path -Pattern "put_Bounds"
           Select-String -Path $path -Pattern "put_ZoomFactor"
+          Select-String -Path $path -Pattern "native caption hit-test enabled"
           Select-String -Path $path -Pattern "WM_NCHITTEST"
-          Select-String -Path $path -Pattern "HTCAPTION"
-          Select-String -Path $path -Pattern "windowsx.h"
-          Select-String -Path $path -Pattern "DPI-aware persistent folder-pane zoom enabled"
+          Select-String -Path $path -Pattern "HTCLOSE"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -522,7 +480,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V8 FIXED package
+      - name: Prepare V9 CAPTION FIX package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -538,7 +496,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V8 FIXED - UPDATE
+          title Outlook Ad Hider V9 CAPTION FIX - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -557,7 +515,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V7 DLL with V8 FIXED...
+          echo Replacing installed DLL with V9 CAPTION FIX...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -583,14 +541,12 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V8 FIXED DLL INSTALLED SUCCESSFULLY
+          echo   V9 CAPTION FIX DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V8 FIXED keeps the proven ad fix and the 500 px minimum height.
+          echo V9 CAPTION FIX keeps the proven ad fix, the 500 px minimum height, and the docked folder-pane zoom.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
-          echo Folder-pane zoom is now DPI-aware and uses the Outlook client width.
-          echo WebView2 bounds are re-synced on resize to keep title-bar buttons clickable.
-          echo NC hit-testing workaround applied for custom-sized windows.
+          echo Folder-pane zoom remains DPI-aware; native Minimize/Maximize/Close hit-testing is restored at narrow window sizes.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -601,9 +557,9 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V8 FIXED
+          Outlook Ad Hider V9 CAPTION FIX
           --------------------------
-          Built from the proven V7 workflow.
+          Built from the V8 FIXED workflow, with a native caption-button hit-test repair.
 
           Ad hiding:
           - Keeps the proven selector unchanged:
@@ -624,16 +580,16 @@ jobs:
           - This fixes the 125%/150% DPI mismatch that made the old threshold engage late.
           - Reference logical width: 960 px.
           - Minimum WebView2 ZoomFactor: 0.45.
-          - Recalculates on WM_SIZE, WM_WINDOWPOSCHANGED and WM_DPICHANGED.
-          - WebView2 put_Bounds is called together with put_ZoomFactor so that
-            hit-testing stays aligned with rendering.
-          - WM_DPICHANGED is handled by this hook and no longer forwarded to the
-            original WndProc, preventing double DPI scaling of the WebView2 content.
-          - NC hit-testing workaround: when Outlook returns HTNOWHERE for a point
-            inside the title bar (custom-sized window), HTCAPTION is forced so the
-            min/max/close buttons remain clickable and X actually closes the app.
+          - Recalculates on WM_SIZE and WM_DPICHANGED.
           - Does not try to resurrect the folder tree after Outlook has unmounted it;
             instead it keeps Outlook in its wide/docked responsive layout.
+
+          Caption buttons:
+          - Keeps WebView2 zoom for the docked folder pane.
+          - Intercepts WM_NCHITTEST only in the top-right caption strip.
+          - Restores native HTCLOSE / HTMAXBUTTON / HTMINBUTTON behavior.
+          - Uses DPI-scaled 46 x 34 DIP hit regions.
+          - Leaves the rest of Outlook's title bar and WebView hit-testing unchanged.
 
           JavaScript/CSS injection:
           - CSS is kept on one generated JavaScript string line.
@@ -646,12 +602,12 @@ jobs:
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8-FIXED.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V9-CAPTION-FIX.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V8 FIXED package
+      - name: Upload V9 CAPTION FIX package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V8-FIXED
+          name: Outlook-Ad-Hider-V9-CAPTION-FIX
           path: package
           if-no-files-found: error
