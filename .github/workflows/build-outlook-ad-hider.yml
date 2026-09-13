@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V8 FIXED
+name: Build Outlook Ad Hider V8.3 SAFE
 
 on:
   workflow_dispatch:
@@ -17,13 +17,13 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V8 FIXED
+      - name: Patch worker for Outlook V8.3 SAFE
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V8 FIXED native/window WebView2 fix:
+          # V8.3 SAFE native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
           # - keep native horizontal resizing unrestricted;
           # - below 960 logical client px, dynamically lower WebView2 host zoom so the page keeps
@@ -41,7 +41,7 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V8 FIXED - keep the classic docked folder pane by preserving Outlook's
+          // MUSICBANTER V8.3 SAFE - keep the classic docked folder pane by preserving Outlook's
           // wide logical WebView layout while allowing the native window itself to narrow.
           static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
@@ -116,7 +116,7 @@ jobs:
                   }
                   else
                   {
-                      DbgPrintf(L"NOP V8 FIXED: put_ZoomFactor failed 0x%08X", hr);
+                      DbgPrintf(L"NOP V8.3 SAFE: put_ZoomFactor failed 0x%08X", hr);
                   }
               }
           }
@@ -149,7 +149,7 @@ jobs:
 
               controller->AddRef();
               g_mbWebViewController = controller;
-              DbgPrintf(L"NOP V8 FIXED: main Outlook WebView2 controller captured");
+              DbgPrintf(L"NOP V8.3 SAFE: main Outlook WebView2 controller captured");
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -233,7 +233,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V8 FIXED: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V8.3 SAFE: Outlook Host window not found yet");
                   return;
               }
 
@@ -244,7 +244,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.3 SAFE: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -261,7 +261,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8.3 SAFE: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -272,7 +272,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V8 FIXED: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
+              DbgPrintf(L"NOP V8.3 SAFE: 500 px min height + DPI-aware persistent folder-pane zoom enabled");
               MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
           }
 
@@ -315,6 +315,39 @@ jobs:
             throw "Could not locate CSS injection block."
           }
           $content = [regex]::Replace($content, $pattern, $replacement, 1)
+
+          # V8.3 SAFE title-bar alignment fix.
+          # Global WebView2 ZoomFactor scales Outlook's HTML title controls, while the
+          # native Window Controls Overlay keeps its own physical geometry. Counter-scale
+          # only #windowIconsHost so the visible buttons stay aligned with that overlay.
+          $titleNeedle = 'document.head.appendChild(styleElement);\n\'
+          $titleReplacement = @'
+          document.head.appendChild(styleElement);\n\
+          if (!window.__musicbanterTitleButtonsV83) {\n\
+            window.__musicbanterTitleButtonsV83 = true;\n\
+            const mbBaseDpr = 1.25;\n\
+            const mbAlignTitleButtons = () => {\n\
+              const host = document.getElementById('windowIconsHost');\n\
+              if (!host) return;\n\
+              const dpr = window.devicePixelRatio || mbBaseDpr;\n\
+              let scale = mbBaseDpr / dpr;\n\
+              if (scale < 1) scale = 1;\n\
+              if (scale > 3) scale = 3;\n\
+              host.style.transformOrigin = '100% 0%';\n\
+              host.style.transform = 'scale(' + scale + ')';\n\
+              host.style.willChange = 'transform';\n\
+            };\n\
+            mbAlignTitleButtons();\n\
+            window.addEventListener('resize', mbAlignTitleButtons, true);\n\
+            new MutationObserver(mbAlignTitleButtons).observe(document.documentElement, { childList: true, subtree: true });\n\
+            setInterval(mbAlignTitleButtons, 250);\n\
+          }\n\
+          '@
+
+          if (-not $content.Contains($titleNeedle)) {
+            throw "Could not locate document.head.appendChild(styleElement) for V8.3 SAFE title-bar fix."
+          }
+          $content = $content.Replace($titleNeedle, $titleReplacement)
 
           # Disable the patcher's F12 interception.
           $content = $content.Replace(
@@ -387,7 +420,7 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V8 FIXED markers:"
+          Write-Host "V8.3 SAFE markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
           Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
           Select-String -Path $path -Pattern "value='other'"
@@ -398,6 +431,9 @@ jobs:
           Select-String -Path $path -Pattern "GetClientRect"
           Select-String -Path $path -Pattern "put_ZoomFactor"
           Select-String -Path $path -Pattern "DPI-aware persistent folder-pane zoom enabled"
+          Select-String -Path $path -Pattern "__musicbanterTitleButtonsV83"
+          Select-String -Path $path -Pattern "windowIconsHost"
+          Select-String -Path $path -Pattern "mbBaseDpr = 1.25"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -414,7 +450,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V8 FIXED package
+      - name: Prepare V8.3 SAFE package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -430,7 +466,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V8 FIXED - UPDATE
+          title Outlook Ad Hider V8.3 SAFE - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -449,7 +485,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V7 DLL with V8 FIXED...
+          echo Replacing V8 FIXED DLL with V8.3 SAFE...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -475,12 +511,13 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V8 FIXED DLL INSTALLED SUCCESSFULLY
+          echo   V8.3 SAFE DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V8 FIXED keeps the proven ad fix and the 500 px minimum height.
+          echo V8.3 SAFE keeps the proven ad fix and the 500 px minimum height.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
-          echo Folder-pane zoom is now DPI-aware and uses the Outlook client width.
+          echo Folder-pane zoom is DPI-aware and uses the Outlook client width.
+          echo V8.3 SAFE counter-scales only the visible title buttons to keep them aligned.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -491,7 +528,7 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V8 FIXED
+          Outlook Ad Hider V8.3 SAFE
           --------------------------
           Built from the proven V7 workflow.
 
@@ -523,18 +560,29 @@ jobs:
           - This fixes the broken V8 build where raw newlines caused ExecuteScript
             to fail parsing, so none of the injected CSS was applied.
 
+          V8.3 SAFE title-bar fix:
+          - Built directly from the known-good V8 FIXED base.
+          - Adds no extra native caption-button or WebMessage event machinery.
+          - Outlook's visible buttons remain #windowIconsHost with three 48 px controls.
+          - WebView2 ZoomFactor also changes window.devicePixelRatio.
+          - The unzoomed DPR on this PC is 1.25.
+          - V8.3 counter-scales only #windowIconsHost by 1.25/devicePixelRatio,
+            anchored at the top-right corner.
+          - This is intended to keep Minimize / Maximize-Restore / Close visually
+            aligned with the native Window Controls Overlay while Outlook content stays zoomed.
+
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
 
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8-FIXED.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.3-SAFE.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V8 FIXED package
+      - name: Upload V8.3 SAFE package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V8-FIXED
+          name: Outlook-Ad-Hider-V8.3-SAFE
           path: package
           if-no-files-found: error
