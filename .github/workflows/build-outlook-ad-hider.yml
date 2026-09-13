@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V9 CAPTION FIX
+name: Build Outlook Ad Hider V10 RASTER FIX
 
 on:
   workflow_dispatch:
@@ -17,19 +17,19 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V9 CAPTION FIX
+      - name: Patch worker for Outlook V10 RASTER FIX
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V9 CAPTION FIX native/window WebView2 fix:
+          # V10 RASTER FIX native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
           # - keep native horizontal resizing unrestricted;
-          # - below 960 logical client px, dynamically lower WebView2 host zoom so the page keeps
-          #   approximately the same wide CSS viewport. This lets Outlook's own
-          #   responsive React code remain in its real docked FolderPaneContainer layout
-          #   instead of switching NavigationPane from Ni89i to a7Ps_ and unmounting YYA9V.
+          # - below 960 logical client px, lower WebView2 RasterizationScale in raw-pixel mode
+          #   so the page keeps approximately the same wide logical viewport WITHOUT browser zoom.
+          #   This keeps Outlook's real docked FolderPaneContainer layout while avoiding the
+          #   title-bar/click-region desynchronisation seen with ZoomFactor.
           $nativeNeedle = @'
               OutputDebugStringW(L"\r\n");
           }
@@ -41,25 +41,27 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V9 CAPTION FIX - keep the classic docked folder pane by preserving Outlook's
-          // wide logical WebView layout while allowing the native window itself to narrow.
+          // MUSICBANTER V10 RASTER FIX - preserve Outlook's wide logical layout without using
+          // WebView2 ZoomFactor. ZoomFactor changes HTML layout/zoom and can desynchronise the
+          // custom Outlook title bar hit regions. RasterizationScale in raw-pixel bounds mode
+          // keeps the physical WebView rectangle fixed while increasing the logical viewport.
           static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
-          static const double MB_MIN_WIDE_LAYOUT_ZOOM = 0.45;
+          static const double MB_MIN_LAYOUT_SCALE = 0.45;
+          static const UINT MB_WM_APPLY_WIDE_LAYOUT = WM_APP + 0x2B3;
           static HWND g_mbOutlookHost = nullptr;
           static WNDPROC g_mbOriginalOutlookWndProc = nullptr;
           static ICoreWebView2Controller* g_mbWebViewController = nullptr;
-          static double g_mbLastZoom = -1.0;
+          static ICoreWebView2Controller3* g_mbWebViewController3 = nullptr;
+          static double g_mbLastRasterizationScale = -1.0;
 
-          void MBUpdateOutlookWideLayoutZoom(HWND hWnd)
+          void MBUpdateOutlookWideLayoutScale(HWND hWnd)
           {
-              if (!hWnd || !g_mbWebViewController)
+              if (!hWnd || !g_mbWebViewController3)
               {
                   return;
               }
 
-              // Use CLIENT width, because Outlook's responsive WebView layout is based on
-              // the drawable content area rather than the outer Win32 window frame.
               RECT clientRect = {};
               if (!::GetClientRect(hWnd, &clientRect))
               {
@@ -72,51 +74,69 @@ jobs:
                   return;
               }
 
-              // GetClientRect is in device pixels for this per-monitor-DPI-aware window.
-              // Convert to 96-DPI logical pixels before comparing against the CSS-layout
-              // reference width. This is essential at 125%, 150%, etc.
               UINT dpi = ::GetDpiForWindow(hWnd);
               if (dpi == 0)
               {
                   dpi = 96;
               }
 
-              double logicalClientWidth =
-                  static_cast<double>(clientWidthPx) * 96.0 /
-                  static_cast<double>(dpi);
+              const double baseRasterizationScale =
+                  static_cast<double>(dpi) / 96.0;
 
-              double zoom = 1.0;
+              const double logicalClientWidth =
+                  static_cast<double>(clientWidthPx) /
+                  baseRasterizationScale;
+
+              double layoutScale = 1.0;
               if (logicalClientWidth < static_cast<double>(MB_WIDE_LAYOUT_REFERENCE_WIDTH))
               {
-                  zoom = logicalClientWidth /
-                         static_cast<double>(MB_WIDE_LAYOUT_REFERENCE_WIDTH);
+                  layoutScale = logicalClientWidth /
+                                static_cast<double>(MB_WIDE_LAYOUT_REFERENCE_WIDTH);
               }
 
-              if (zoom < MB_MIN_WIDE_LAYOUT_ZOOM)
+              if (layoutScale < MB_MIN_LAYOUT_SCALE)
               {
-                  zoom = MB_MIN_WIDE_LAYOUT_ZOOM;
+                  layoutScale = MB_MIN_LAYOUT_SCALE;
               }
-              if (zoom > 1.0)
+              if (layoutScale > 1.0)
               {
-                  zoom = 1.0;
+                  layoutScale = 1.0;
               }
 
-              double delta = zoom - g_mbLastZoom;
+              // In USE_RAW_PIXELS mode, lowering RasterizationScale leaves the physical
+              // WebView bounds unchanged but gives the page a wider logical coordinate space:
+              //     logical size = raw pixel size / rasterization scale
+              // This is the same wide-layout effect we need, without page ZoomFactor.
+              const double targetRasterizationScale =
+                  baseRasterizationScale * layoutScale;
+
+              // Reassert these after Outlook has processed its own resize/DPI messages.
+              // This also protects against the host restoring its default WebView settings.
+              g_mbWebViewController->put_ZoomFactor(1.0);
+              g_mbWebViewController3->put_BoundsMode(
+                  COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS
+              );
+              g_mbWebViewController3->put_ShouldDetectMonitorScaleChanges(FALSE);
+
+              double delta = targetRasterizationScale - g_mbLastRasterizationScale;
               if (delta < 0.0)
               {
                   delta = -delta;
               }
 
-              if (g_mbLastZoom < 0.0 || delta >= 0.002)
+              if (g_mbLastRasterizationScale < 0.0 || delta >= 0.002)
               {
-                  HRESULT hr = g_mbWebViewController->put_ZoomFactor(zoom);
+                  HRESULT hr = g_mbWebViewController3->put_RasterizationScale(
+                      targetRasterizationScale
+                  );
+
                   if (SUCCEEDED(hr))
                   {
-                      g_mbLastZoom = zoom;
+                      g_mbLastRasterizationScale = targetRasterizationScale;
                   }
                   else
                   {
-                      DbgPrintf(L"NOP V8 FIXED: put_ZoomFactor failed 0x%08X", hr);
+                      DbgPrintf(L"NOP V10 RASTER FIX: put_RasterizationScale failed 0x%08X", hr);
                   }
               }
           }
@@ -147,9 +167,39 @@ jobs:
                   return;
               }
 
+              ICoreWebView2Controller3* controller3 = nullptr;
+              HRESULT qhr = controller->QueryInterface(IID_PPV_ARGS(&controller3));
+              if (FAILED(qhr) || !controller3)
+              {
+                  DbgPrintf(L"NOP V10 RASTER FIX: ICoreWebView2Controller3 unavailable 0x%08X", qhr);
+                  return;
+              }
+
+              // Never dynamically zoom the page. Keep browser zoom at its normal value.
+              controller->put_ZoomFactor(1.0);
+
+              HRESULT hr = controller3->put_BoundsMode(
+                  COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS
+              );
+              if (FAILED(hr))
+              {
+                  DbgPrintf(L"NOP V10 RASTER FIX: put_BoundsMode failed 0x%08X", hr);
+                  controller3->Release();
+                  return;
+              }
+
+              hr = controller3->put_ShouldDetectMonitorScaleChanges(FALSE);
+              if (FAILED(hr))
+              {
+                  DbgPrintf(L"NOP V10 RASTER FIX: put_ShouldDetectMonitorScaleChanges failed 0x%08X", hr);
+                  controller3->Release();
+                  return;
+              }
+
               controller->AddRef();
               g_mbWebViewController = controller;
-              DbgPrintf(L"NOP V8 FIXED: main Outlook WebView2 controller captured");
+              g_mbWebViewController3 = controller3;
+              DbgPrintf(L"NOP V10 RASTER FIX: main Outlook WebView2 controller3 captured");
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -161,68 +211,10 @@ jobs:
                   return ::DefWindowProcW(hWnd, uMsg, wParam, lParam);
               }
 
-              // MUSICBANTER V9 CAPTION FIX:
-              // WebView2 ZoomFactor keeps Outlook in the wide/docked responsive layout, but
-              // New Outlook also places its custom title bar over the WebView. At zoom < 1.0
-              // the WebView can claim the top-right area as client/drag content and the native
-              // caption buttons then stop behaving like real Minimize/Maximize/Close buttons.
-              // Force the standard Windows non-client hit-test for only the three caption
-              // rectangles. This leaves the rest of Outlook/WebView hit-testing untouched.
-              if (uMsg == WM_NCHITTEST)
+              if (uMsg == MB_WM_APPLY_WIDE_LAYOUT)
               {
-                  LRESULT originalHit = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-
-                  if (originalHit == HTCLOSE ||
-                      originalHit == HTMAXBUTTON ||
-                      originalHit == HTMINBUTTON)
-                  {
-                      return originalHit;
-                  }
-
-                  RECT windowRect = {};
-                  if (::GetWindowRect(hWnd, &windowRect))
-                  {
-                      POINT screenPoint = {
-                          static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
-                          static_cast<LONG>(static_cast<short>(HIWORD(lParam)))
-                      };
-
-                      const LONG windowWidth = windowRect.right - windowRect.left;
-                      const LONG localX = screenPoint.x - windowRect.left;
-                      const LONG localY = screenPoint.y - windowRect.top;
-
-                      UINT dpi = ::GetDpiForWindow(hWnd);
-                      if (dpi == 0)
-                      {
-                          dpi = 96;
-                      }
-
-                      // Windows 11 caption hit regions are approximately 46 x 34 DIPs.
-                      // Scale them with the actual monitor DPI so the fix also works at
-                      // 125%, 150%, etc. The rectangles are intentionally limited to the
-                      // far-right top strip so Outlook's own title-bar controls stay native.
-                      const LONG captionButtonWidth = ::MulDiv(46, static_cast<int>(dpi), 96);
-                      const LONG captionButtonHeight = ::MulDiv(34, static_cast<int>(dpi), 96);
-                      const LONG captionStripLeft = windowWidth - (captionButtonWidth * 3);
-
-                      if (localY >= 0 && localY < captionButtonHeight &&
-                          localX >= captionStripLeft && localX < windowWidth)
-                      {
-                          if (localX >= windowWidth - captionButtonWidth)
-                          {
-                              return HTCLOSE;
-                          }
-
-                          if (localX >= windowWidth - (captionButtonWidth * 2))
-                          {
-                              return HTMAXBUTTON;
-                          }
-
-                          return HTMINBUTTON;
-                      }
-                  }
-
-                  return originalHit;
+                  MBUpdateOutlookWideLayoutScale(hWnd);
+                  return 0;
               }
 
               if (uMsg == WM_GETMINMAXINFO)
@@ -241,7 +233,7 @@ jobs:
               if (uMsg == WM_SIZE || uMsg == WM_DPICHANGED)
               {
                   LRESULT result = ::CallWindowProcW(original, hWnd, uMsg, wParam, lParam);
-                  MBUpdateOutlookWideLayoutZoom(hWnd);
+                  MBUpdateOutlookWideLayoutScale(hWnd);
                   return result;
               }
 
@@ -288,7 +280,7 @@ jobs:
           {
               if (g_mbOutlookHost != nullptr && g_mbOriginalOutlookWndProc != nullptr)
               {
-                  MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
+                  MBUpdateOutlookWideLayoutScale(g_mbOutlookHost);
                   return;
               }
 
@@ -297,7 +289,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V8 FIXED: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V10 RASTER FIX: Outlook Host window not found yet");
                   return;
               }
 
@@ -308,7 +300,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V10 RASTER FIX: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -325,7 +317,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V8 FIXED: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V10 RASTER FIX: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -336,11 +328,13 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V9 CAPTION FIX: 500 px min height + DPI-aware folder-pane zoom + native caption hit-test enabled");
-              MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
+              DbgPrintf(L"NOP V10 RASTER FIX: 500 px min height + raw-pixel raster wide-layout enabled");
+              MBUpdateOutlookWideLayoutScale(g_mbOutlookHost);
+              ::PostMessageW(g_mbOutlookHost, MB_WM_APPLY_WIDE_LAYOUT, 0, 0);
           }
 
           // Example: MinHook signature for CreateCoreWebView2EnvironmentWithOptions
+          '@
           '@
 
           if (-not $content.Contains($nativeNeedle)) {
@@ -357,7 +351,7 @@ jobs:
                   MBInstallOutlookMinHeightHook();
                   if (g_mbOutlookHost)
                   {
-                      MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
+                      MBUpdateOutlookWideLayoutScale(g_mbOutlookHost);
                   }
           '@
 
@@ -366,7 +360,7 @@ jobs:
           }
           $content = $content.Replace($controllerNeedle, $controllerReplacement)
 
-          # V9 CAPTION FIX UI CSS.
+          # V10 RASTER FIX UI CSS.
           # IMPORTANT: the cssClass string is intentionally kept on one JavaScript line.
           # Raw newlines inside this quoted JS string would make ExecuteScript fail to parse.
           $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
@@ -451,19 +445,21 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V9 CAPTION FIX markers:"
+          Write-Host "V10 RASTER FIX markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
           Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
           Select-String -Path $path -Pattern "value='other'"
           Select-String -Path $path -Pattern "MB_WIDE_LAYOUT_REFERENCE_WIDTH"
           Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_HEIGHT"
-          Select-String -Path $path -Pattern "MB_MIN_WIDE_LAYOUT_ZOOM"
+          Select-String -Path $path -Pattern "MB_MIN_LAYOUT_SCALE"
           Select-String -Path $path -Pattern "GetDpiForWindow"
           Select-String -Path $path -Pattern "GetClientRect"
-          Select-String -Path $path -Pattern "put_ZoomFactor"
-          Select-String -Path $path -Pattern "native caption hit-test enabled"
-          Select-String -Path $path -Pattern "WM_NCHITTEST"
-          Select-String -Path $path -Pattern "HTCLOSE"
+          Select-String -Path $path -Pattern "ICoreWebView2Controller3"
+          Select-String -Path $path -Pattern "put_RasterizationScale"
+          Select-String -Path $path -Pattern "put_BoundsMode"
+          Select-String -Path $path -Pattern "put_ShouldDetectMonitorScaleChanges"
+          Select-String -Path $path -Pattern "MB_WM_APPLY_WIDE_LAYOUT"
+          Select-String -Path $path -Pattern "raw-pixel raster wide-layout enabled"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -480,7 +476,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V9 CAPTION FIX package
+      - name: Prepare V10 RASTER FIX package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -496,7 +492,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V9 CAPTION FIX - UPDATE
+          title Outlook Ad Hider V10 RASTER FIX - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -515,7 +511,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing installed DLL with V9 CAPTION FIX...
+          echo Replacing installed DLL with V10 RASTER FIX...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -541,12 +537,12 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V9 CAPTION FIX DLL INSTALLED SUCCESSFULLY
+          echo   V10 RASTER FIX DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V9 CAPTION FIX keeps the proven ad fix, the 500 px minimum height, and the docked folder-pane zoom.
+          echo V10 RASTER FIX keeps the proven ad fix, the 500 px minimum height, and the docked folder pane.
           echo It hides the Microsoft 365 purchase button and protects the Other tab.
-          echo Folder-pane zoom remains DPI-aware; native Minimize/Maximize/Close hit-testing is restored at narrow window sizes.
+          echo Wide-layout preservation now uses WebView2 rasterization instead of ZoomFactor, so title-bar click regions stay aligned.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -557,9 +553,9 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V9 CAPTION FIX
+          Outlook Ad Hider V10 RASTER FIX
           --------------------------
-          Built from the V8 FIXED workflow, with a native caption-button hit-test repair.
+          Built from the V8 FIXED workflow, replacing dynamic WebView zoom with raster scaling.
 
           Ad hiding:
           - Keeps the proven selector unchanged:
@@ -579,17 +575,16 @@ jobs:
           - Converts device pixels to 96-DPI logical pixels using GetDpiForWindow.
           - This fixes the 125%/150% DPI mismatch that made the old threshold engage late.
           - Reference logical width: 960 px.
-          - Minimum WebView2 ZoomFactor: 0.45.
+          - Minimum wide-layout scale: 0.45.
           - Recalculates on WM_SIZE and WM_DPICHANGED.
-          - Does not try to resurrect the folder tree after Outlook has unmounted it;
-            instead it keeps Outlook in its wide/docked responsive layout.
+          - Reapplies once after controller setup so Outlook cannot immediately overwrite it.
+          - Keeps Outlook in its wide/docked responsive layout without dynamic browser zoom.
 
           Caption buttons:
-          - Keeps WebView2 zoom for the docked folder pane.
-          - Intercepts WM_NCHITTEST only in the top-right caption strip.
-          - Restores native HTCLOSE / HTMAXBUTTON / HTMINBUTTON behavior.
-          - Uses DPI-scaled 46 x 34 DIP hit regions.
-          - Leaves the rest of Outlook's title bar and WebView hit-testing unchanged.
+          - Dynamic WebView2 ZoomFactor is removed.
+          - Uses ICoreWebView2Controller3 RasterizationScale in USE_RAW_PIXELS mode.
+          - Physical WebView bounds stay fixed while the logical viewport remains wide.
+          - No WM_NCHITTEST override is installed, so Outlook/Windows keep their native click regions.
 
           JavaScript/CSS injection:
           - CSS is kept on one generated JavaScript string line.
@@ -602,12 +597,12 @@ jobs:
           If anything behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V9-CAPTION-FIX.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V10-RASTER-FIX.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V9 CAPTION FIX package
+      - name: Upload V10 RASTER FIX package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V9-CAPTION-FIX
+          name: Outlook-Ad-Hider-V10-RASTER-FIX
           path: package
           if-no-files-found: error
