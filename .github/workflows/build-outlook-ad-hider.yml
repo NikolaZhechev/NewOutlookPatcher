@@ -1,4 +1,4 @@
-name: Build Outlook Ad Hider V7
+name: Build Outlook Ad Hider V8
 
 on:
   workflow_dispatch:
@@ -17,19 +17,19 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Patch worker for Outlook V7
+      - name: Patch worker for Outlook V8
         shell: pwsh
         run: |
           $path = "NOP\worker\dllmain.cpp"
           $content = Get-Content -Path $path -Raw
 
-          # V7 native/window WebView2 fix:
+          # V8 native/window WebView2 fix:
           # - keep the proven V5 500 px minimum-height change;
-          # - stop forcing the V6 943 px native minimum width;
-          # - below 943 px, dynamically lower the WebView2 host zoom so the page keeps
-          #   approximately the same logical CSS viewport width. This lets Outlook's own
+          # - keep horizontal native resizing unrestricted;
+          # - below 960 px, dynamically lower the WebView2 host zoom so the page keeps
+          #   a wide logical CSS viewport. This lets Outlook's own
           #   responsive React code remain in its real docked FolderPaneContainer layout
-          #   instead of switching NavigationPane from Ni89i to a7Ps_ and unmounting YYA9V.
+          #   instead of switching to the narrow layout and unmounting the folder tree.
           $nativeNeedle = @'
               OutputDebugStringW(L"\r\n");
           }
@@ -41,11 +41,11 @@ jobs:
               OutputDebugStringW(L"\r\n");
           }
 
-          // MUSICBANTER V7 - keep the classic docked folder pane by preserving Outlook's
+          // MUSICBANTER V8 - keep the classic docked folder pane by preserving Outlook's
           // wide logical WebView layout while allowing the native window itself to narrow.
-          static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 943;
+          static const LONG MB_WIDE_LAYOUT_REFERENCE_WIDTH = 960;
           static const LONG MB_MIN_OUTLOOK_HEIGHT = 500;
-          static const double MB_MIN_WIDE_LAYOUT_ZOOM = 0.70;
+          static const double MB_MIN_WIDE_LAYOUT_ZOOM = 0.45;
           static HWND g_mbOutlookHost = nullptr;
           static WNDPROC g_mbOriginalOutlookWndProc = nullptr;
           static ICoreWebView2Controller* g_mbWebViewController = nullptr;
@@ -101,7 +101,7 @@ jobs:
                   }
                   else
                   {
-                      DbgPrintf(L"NOP V7: put_ZoomFactor failed 0x%08X", hr);
+                      DbgPrintf(L"NOP V8: put_ZoomFactor failed 0x%08X", hr);
                   }
               }
           }
@@ -134,7 +134,7 @@ jobs:
 
               controller->AddRef();
               g_mbWebViewController = controller;
-              DbgPrintf(L"NOP V7: main Outlook WebView2 controller captured");
+              DbgPrintf(L"NOP V8: main Outlook WebView2 controller captured");
           }
 
           LRESULT CALLBACK MBOutlookHostWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -218,7 +218,7 @@ jobs:
 
               if (!search.window)
               {
-                  DbgPrintf(L"NOP V7: Outlook Host window not found yet");
+                  DbgPrintf(L"NOP V8: Outlook Host window not found yet");
                   return;
               }
 
@@ -229,7 +229,7 @@ jobs:
 
               if (!original && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V7: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8: GetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   return;
               }
 
@@ -246,7 +246,7 @@ jobs:
 
               if (!previous && ::GetLastError() != ERROR_SUCCESS)
               {
-                  DbgPrintf(L"NOP V7: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
+                  DbgPrintf(L"NOP V8: SetWindowLongPtrW failed 0x%08X", ::GetLastError());
                   g_mbOriginalOutlookWndProc = nullptr;
                   return;
               }
@@ -257,7 +257,7 @@ jobs:
               }
 
               g_mbOutlookHost = search.window;
-              DbgPrintf(L"NOP V7: 500 px min height + adaptive WebView2 wide-layout zoom enabled");
+              DbgPrintf(L"NOP V8: 500 px min height + persistent docked folder pane zoom enabled");
               MBUpdateOutlookWideLayoutZoom(g_mbOutlookHost);
           }
 
@@ -287,11 +287,18 @@ jobs:
           }
           $content = $content.Replace($controllerNeedle, $controllerReplacement)
 
-          # Keep only the selector that was proven manually in this Outlook build.
+          # V8 UI fixes.
+          # Keep the proven ad selector unchanged.
+          # Hide the Microsoft 365 purchase button.
+          # Keep the "Other" tab from shrinking/clipping when unread state is shown.
           $pattern = '(?s)const cssClass = \\"\\.*?styleElement\.appendChild'
           $replacement = @'
           const cssClass = \"\
-          [data-message-ad-id] { display: none !important; }\";\n\
+          [data-message-ad-id] { display: none !important; }\n\
+          #owaBuyMicrosoft365Btn_container { display: none !important; }\n\
+          button[role='tab'][value='other'] { flex: 0 0 auto !important; flex-shrink: 0 !important; width: auto !important; min-width: max-content !important; max-width: none !important; overflow: visible !important; white-space: nowrap !important; }\n\
+          button[role='tab'][value='other'] .fui-Tab__content, button[role='tab'][value='other'] .fui-Tab__content--reserved-space { white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; max-width: none !important; }\n\
+          div:has(> button[role='tab'][value='other']) { flex: 0 0 auto !important; flex-shrink: 0 !important; min-width: max-content !important; overflow: visible !important; }\";\n\
           styleElement.appendChild
           '@
           if (-not [regex]::IsMatch($content, $pattern)) {
@@ -370,12 +377,15 @@ jobs:
             [System.Text.UTF8Encoding]::new($true)
           )
 
-          Write-Host "V7 markers:"
+          Write-Host "V8 markers:"
           Select-String -Path $path -Pattern "data-message-ad-id"
+          Select-String -Path $path -Pattern "owaBuyMicrosoft365Btn_container"
+          Select-String -Path $path -Pattern "value='other'"
           Select-String -Path $path -Pattern "MB_WIDE_LAYOUT_REFERENCE_WIDTH"
           Select-String -Path $path -Pattern "MB_MIN_OUTLOOK_HEIGHT"
+          Select-String -Path $path -Pattern "MB_MIN_WIDE_LAYOUT_ZOOM"
           Select-String -Path $path -Pattern "put_ZoomFactor"
-          Select-String -Path $path -Pattern "adaptive WebView2 wide-layout zoom enabled"
+          Select-String -Path $path -Pattern "persistent docked folder pane zoom enabled"
           Select-String -Path $path -Pattern "WebView2 hook installed"
 
       - name: Restore native packages
@@ -392,7 +402,7 @@ jobs:
             exit $LASTEXITCODE
           }
 
-      - name: Prepare V7 package
+      - name: Prepare V8 package
         shell: pwsh
         run: |
           $package = Join-Path $env:GITHUB_WORKSPACE "package"
@@ -408,7 +418,7 @@ jobs:
           $update = @'
           @echo off
           setlocal EnableExtensions
-          title Outlook Ad Hider V7 - UPDATE
+          title Outlook Ad Hider V8 - UPDATE
 
           fltmc >nul 2>&1
           if errorlevel 1 (
@@ -427,7 +437,7 @@ jobs:
           )
 
           :copydll
-          echo Replacing V6 DLL with V7...
+          echo Replacing V7 DLL with V8...
           for /L %%N in (1,1,10) do (
               copy /Y "%~dp0NewOutlookPatcher.dll" "%SystemRoot%\System32\NewOutlookPatcher.dll" >nul 2>&1
               if not errorlevel 1 goto :verify
@@ -453,12 +463,13 @@ jobs:
 
           echo.
           echo ============================================
-          echo   V7 DLL INSTALLED SUCCESSFULLY
+          echo   V8 DLL INSTALLED SUCCESSFULLY
           echo ============================================
           echo.
-          echo V7 keeps the V3 ad fix and the V5 500 px minimum height.
-          echo Horizontal resizing is free again. Below 943 px V7 dynamically
-          echo zooms the Outlook WebView just enough to keep its wide docked layout.
+          echo V8 keeps the proven ad fix and the 500 px minimum height.
+          echo It also hides the Microsoft 365 purchase button and keeps Other unclipped.
+          echo Below 960 px V8 dynamically zooms the Outlook WebView to preserve
+          echo the wide docked folder-pane layout, down to a minimum ZoomFactor of 0.45.
           echo.
           echo Opening Outlook...
           start "" explorer.exe "shell:AppsFolder\Microsoft.OutlookForWindows_8wekyb3d8bbwe!Microsoft.OutlookforWindows"
@@ -469,41 +480,48 @@ jobs:
           '@
 
           $readme = @'
-          Outlook Ad Hider V7
+          Outlook Ad Hider V8
           --------------------
-          Base: proven V3 ad fix + working V5 500 px minimum-height fix.
+          Base: proven V7 behavior, keeping the working ad fix and 500 px minimum height.
 
-          Keeps the proven ad rule:
+          Proven ad rule remains unchanged:
           [data-message-ad-id] { display: none !important; }
+
+          V8 UI fixes:
+          - Hides the Microsoft 365 purchase/Premium button by its stable element ID:
+            #owaBuyMicrosoft365Btn_container
+          - Keeps the Other tab from shrinking/clipping by targeting:
+            button[role='tab'][value='other']
+          - Does not depend on the Bulgarian text "Други".
 
           Folder-pane fix:
           - Does NOT block React removeChild.
           - Does NOT use the hamburger flyout/overlay.
           - Does NOT spoof matchMedia or ResizeObserver.
-          - Removes V6's artificial 943 px native minimum width.
-          - When the Outlook Host becomes narrower than 943 px, V7 lowers the
-            WebView2 host ZoomFactor proportionally (minimum 0.70).
-          - WebView2 therefore keeps approximately the same logical CSS viewport
-            width, so Outlook should remain in its own wide/docked NavigationPane
-            state instead of switching Ni89i -> a7Ps_ and unmounting YYA9V.
-          - At 943 px and wider, ZoomFactor is exactly 1.0.
+          - Does NOT force a native minimum width.
+          - Uses a 960 px wide-layout reference width.
+          - Below 960 px, V8 lowers WebView2 ZoomFactor proportionally.
+          - Minimum ZoomFactor is 0.45, allowing the docked folder pane to remain
+            mounted at substantially narrower native window widths.
+          - At 960 px and wider, ZoomFactor is exactly 1.0.
+          - The native minimum height remains 500 px.
 
-          This is a native WebView2 layout fix rather than DOM surgery. Microsoft
-          documents that changing ZoomFactor can change window.innerWidth and page
-          layout, which is the behavior V7 intentionally uses.
+          The folder pane is preserved through WebView2 layout behavior rather than
+          DOM resurrection. In the narrow layout Outlook removes the folder tree from
+          the DOM, so V8 aims to keep Outlook in its own wide/docked layout instead.
 
           Existing IFEO/AppVerifier settings stay unchanged.
           Chrome and Chrome cache are not touched.
 
-          If Outlook behaves incorrectly, reinstall the saved V6 or V3 package.
+          If Outlook behaves incorrectly, reinstall the saved V7 package.
           '@
 
-          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V7.cmd") -Value $update -Encoding ASCII
+          Set-Content -Path (Join-Path $package "UPDATE-Outlook-Ad-Hider-V8.cmd") -Value $update -Encoding ASCII
           Set-Content -Path (Join-Path $package "README.txt") -Value $readme -Encoding UTF8
 
-      - name: Upload V7 package
+      - name: Upload V8 package
         uses: actions/upload-artifact@v4
         with:
-          name: Outlook-Ad-Hider-V7
+          name: Outlook-Ad-Hider-V8
           path: package
           if-no-files-found: error
